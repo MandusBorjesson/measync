@@ -11,7 +11,6 @@ type Props = {
   t0: number | null
   t1: number | null
   center: number | null
-  duration: number
 }
 
 function draw(canvas: HTMLCanvasElement, peaks: Peak[], t0?: number | null, t1?: number | null) {
@@ -49,15 +48,10 @@ export function AudioWidget({
   t0,
   t1,
   center,
-  duration,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const peaksRef = useRef<Peak[]>([])
-  const centerRef = useRef(center)
-  const durationRef = useRef(duration)
   const rangeRef = useRef({ t0, t1 })
-  centerRef.current = center
-  durationRef.current = duration
   rangeRef.current = { t0, t1 }
   const followStream = live && !playing && !hasCapture
 
@@ -98,13 +92,8 @@ export function AudioWidget({
 
     const pump = async () => {
       while (!stopped) {
-        const now = centerRef.current
-        const rawStart = playing
-          ? now == null
-            ? null
-            : now - Math.max(durationRef.current, 500_000_000)
-          : rangeRef.current.t0
-        const rawStop = playing ? now : rangeRef.current.t1
+        const rawStart = rangeRef.current.t0
+        const rawStop = rangeRef.current.t1
         const tStart = rawStart == null ? null : Math.round(rawStart / 20_000_000) * 20_000_000
         const tStop = rawStop == null ? null : Math.round(rawStop / 20_000_000) * 20_000_000
         const key = `${tStart}:${tStop}`
@@ -128,11 +117,10 @@ export function AudioWidget({
     return () => {
       stopped = true
     }
-  }, [sourceId, followStream, playing])
+  }, [sourceId, followStream])
 
   const percent = (() => {
     if (followStream) return 100
-    if (playing) return 100
     if (t0 == null || t1 == null || center == null) return 50
     const span = t1 - t0
     if (span <= 0) return 50

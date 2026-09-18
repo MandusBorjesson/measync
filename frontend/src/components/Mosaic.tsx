@@ -151,7 +151,6 @@ function Node(
             t0={t0}
             t1={t1}
             center={props.center}
-            duration={props.duration}
           />
         )}
       </div>
