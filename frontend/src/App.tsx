@@ -497,7 +497,7 @@ export default function App() {
         ) : (
           <div className="empty-workspace">
             <h2>No sources yet</h2>
-            <p>Add a camera or microphone. Drag a tile header to swap or dock it; everyone shares this layout.</p>
+            <p>Add a camera, thermal camera, or microphone. Drag a tile header to swap or dock it; everyone shares this layout.</p>
             <button className="btn btn-primary" onClick={() => setModal('add')}>
               Add source
             </button>

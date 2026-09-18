@@ -67,6 +67,16 @@ export async function fetchFrame(sourceId: string, t: number, signal?: AbortSign
   return res.arrayBuffer()
 }
 
+export function thermalFrameUrl(sourceId: string, t: number): string {
+  return `/api/session/thermal/${encodeURIComponent(sourceId)}/frame?t=${Math.round(t)}`
+}
+
+export async function fetchThermalFrame(sourceId: string, t: number, signal?: AbortSignal): Promise<ArrayBuffer> {
+  const res = await fetch(thermalFrameUrl(sourceId, t), { signal })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.arrayBuffer()
+}
+
 export async function fetchPcm(
   sourceId: string,
   t0: number,

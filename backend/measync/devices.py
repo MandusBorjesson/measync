@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from measync.models import Device
+from measync.thermal import is_thermal_capture, is_thermal_usb, thermal_label
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,8 @@ def list_cameras(max_index: int = 16, busy: set[int] | None = None) -> list[Devi
 
     busy = busy or set()
     for index in indices:
+        if is_thermal_usb(index):
+            continue
         if index in busy:
             found.append(
                 Device(id=f"camera:{index}", kind="camera", label=_camera_label(index), index=index)
@@ -60,6 +63,24 @@ def list_cameras(max_index: int = 16, busy: set[int] | None = None) -> list[Devi
             log.debug("skip camera %s: %s", index, exc)
         finally:
             cap.release()
+    return found
+
+
+def list_thermals() -> list[Device]:
+    found: list[Device] = []
+    video_nodes = sorted(Path("/dev").glob("video*"))
+    seen: set[int] = set()
+    for node in video_nodes:
+        suffix = node.name.removeprefix("video")
+        if not suffix.isdigit():
+            continue
+        index = int(suffix)
+        if index in seen or not is_thermal_capture(index):
+            continue
+        seen.add(index)
+        found.append(
+            Device(id=f"thermal:{index}", kind="thermal", label=thermal_label(index), index=index)
+        )
     return found
 
 
@@ -88,4 +109,4 @@ def list_mics() -> list[Device]:
 
 
 def list_devices(busy_cameras: set[int] | None = None) -> list[Device]:
-    return [*list_cameras(busy=busy_cameras), *list_mics()]
+    return [*list_thermals(), *list_cameras(busy=busy_cameras), *list_mics()]

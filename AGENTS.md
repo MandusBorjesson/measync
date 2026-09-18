@@ -12,7 +12,7 @@ Lab workbench: tiled live sources, one shared RAM capture ring, independent time
 
 Every tile is one of two families. New widgets must pick one; do not add a third scrub/playback model.
 
-- **Real-time** (cameras today; text logs later) — closest **snapshot** to the selected timestamp (window centre).
+- **Real-time** (cameras and Infiray thermals today; text logs later) — closest **snapshot** to the selected timestamp (window centre).
 - **Graph** (audio today; current/voltage later) — render the **selected window**, centered on that timestamp.
 
 Live preview still uses `/ws/live/{source_id}`. Scrub/playback uses HTTP ring queries (point query vs range query).
@@ -28,7 +28,7 @@ Live preview still uses `/ws/live/{source_id}`. Scrub/playback uses HTTP ring qu
 
 ## Invariants (short)
 
-One session, one monotonic-ns time base, one global byte cap with **time-aligned** eviction. Record **clears** the ring. No save/open while recording. Source IDs `{kind}:{index}` (`camera:0`, `audio:1` today). Layout last-write-wins on the presence hub.
+One session, one monotonic-ns time base, one global byte cap with **time-aligned** eviction. Record **clears** the ring. No save/open while recording. Source IDs `{kind}:{index}` (`camera:0`, `thermal:2`, `audio:1` today). Layout last-write-wins on the presence hub.
 
 Details and API tables: [docs/architecture.md](docs/architecture.md).
 

@@ -13,6 +13,7 @@ PCM_OVERHEAD = 32
 @dataclass
 class CamTrack:
     label: str
+    kind: str = "camera"
     t: list[int] = field(default_factory=list)
     jpeg: list[bytes] = field(default_factory=list)
     start: int = 0
@@ -159,11 +160,13 @@ class RingBuffer:
             self.cap_bytes = cap_bytes
             self._evict_unlocked()
 
-    def append_camera(self, source_id: str, label: str, t_ns: int, jpeg: bytes) -> None:
+    def append_camera(
+        self, source_id: str, label: str, t_ns: int, jpeg: bytes, kind: str | None = None
+    ) -> None:
         with self.lock:
             track = self.camera.get(source_id)
             if track is None:
-                track = CamTrack(label=label)
+                track = CamTrack(label=label, kind=kind or source_id.partition(":")[0] or "camera")
                 self.camera[source_id] = track
             self.used += track.append(t_ns, jpeg)
             self._evict_unlocked()
@@ -214,7 +217,7 @@ class RingBuffer:
             out: list[dict] = []
             for sid, track in self.camera.items():
                 if len(track):
-                    out.append({"id": sid, "kind": "camera", "label": track.label, "live": False})
+                    out.append({"id": sid, "kind": track.kind, "label": track.label, "live": False})
             for sid, track in self.audio.items():
                 if len(track):
                     out.append(
@@ -239,7 +242,7 @@ class RingBuffer:
         with self.lock:
             cameras: dict[str, CamTrack] = {}
             for sid, track in self.camera.items():
-                snap = CamTrack(label=track.label)
+                snap = CamTrack(label=track.label, kind=track.kind)
                 snap.t = list(track.t[track.start :])
                 snap.jpeg = list(track.jpeg[track.start :])
                 cameras[sid] = snap

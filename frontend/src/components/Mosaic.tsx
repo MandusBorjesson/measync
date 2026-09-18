@@ -3,6 +3,7 @@ import type { Layout, TileSpec } from '../types'
 import { dropZoneAt, relocateLeaf, setRatio, type DropZone } from '../layout'
 import { AudioWidget } from '../widgets/AudioWidget'
 import { CameraWidget } from '../widgets/CameraWidget'
+import { ThermalWidget } from '../widgets/ThermalWidget'
 
 type Props = {
   layout: Layout
@@ -132,8 +133,18 @@ function Node(
             </button>
           </div>
         </div>
-        {tile.kind === 'camera' ? (
-          <CameraWidget
+        {tile.kind === 'audio' ? (
+          <AudioWidget
+            sourceId={tile.sourceId}
+            live={props.live}
+            playing={props.playing}
+            hasCapture={props.hasCapture}
+            t0={t0}
+            t1={t1}
+            center={props.center}
+          />
+        ) : tile.kind === 'thermal' ? (
+          <ThermalWidget
             sourceId={tile.sourceId}
             live={props.live}
             playing={props.playing}
@@ -143,14 +154,14 @@ function Node(
             origin={props.origin}
           />
         ) : (
-          <AudioWidget
+          <CameraWidget
             sourceId={tile.sourceId}
             live={props.live}
             playing={props.playing}
             hasCapture={props.hasCapture}
-            t0={t0}
-            t1={t1}
+            recording={props.recording}
             center={props.center}
+            origin={props.origin}
           />
         )}
       </div>

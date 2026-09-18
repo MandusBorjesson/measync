@@ -57,7 +57,7 @@ def health() -> dict:
 
 @app.get("/api/devices")
 def list_devices() -> dict:
-    busy = {h.index for h in session().sources.values() if h.kind == "camera"}
+    busy = {h.index for h in session().sources.values() if h.kind in {"camera", "thermal"}}
     return {"devices": [d.model_dump() for d in device_mod.list_devices(busy_cameras=busy)]}
 
 
@@ -96,8 +96,8 @@ def stop_recording() -> dict:
 
 def _resolve_device(source_id: str):
     kind, _, raw_index = source_id.partition(":")
-    if kind not in {"camera", "audio"} or not raw_index.isdigit():
-        raise HTTPException(400, "source id must be camera:<n> or audio:<n>")
+    if kind not in {"camera", "audio", "thermal"} or not raw_index.isdigit():
+        raise HTTPException(400, "source id must be camera:<n>, audio:<n>, or thermal:<n>")
     index = int(raw_index)
     if kind == "camera":
         from pathlib import Path
@@ -106,7 +106,19 @@ def _resolve_device(source_id: str):
 
         if not Path(f"/dev/video{index}").exists():
             raise HTTPException(404, f"device {source_id} not found")
+        from measync.thermal import is_thermal_usb
+
+        if is_thermal_usb(index):
+            raise HTTPException(400, f"device {source_id} is a thermal camera; use thermal:{index}")
         return kind, index, _camera_label(index)
+    if kind == "thermal":
+        from pathlib import Path
+
+        from measync.thermal import is_thermal_capture, thermal_label
+
+        if not Path(f"/dev/video{index}").exists() or not is_thermal_capture(index):
+            raise HTTPException(404, f"device {source_id} not found")
+        return kind, index, thermal_label(index)
     match = next((d for d in device_mod.list_mics() if d.id == source_id), None)
     if match is None:
         raise HTTPException(404, f"device {source_id} not found")
@@ -133,6 +145,14 @@ def camera_frame(source_id: str, t: float) -> Response:
     if jpeg is None:
         raise HTTPException(404, "no frame")
     return Response(content=jpeg, media_type="image/jpeg")
+
+
+@app.get("/api/session/thermal/{source_id:path}/frame")
+def thermal_frame(source_id: str, t: float) -> Response:
+    payload = session().ring.camera_frame(source_id, int(round(t)))
+    if payload is None:
+        raise HTTPException(404, "no frame")
+    return Response(content=payload, media_type="application/octet-stream")
 
 
 @app.get("/api/session/audio/{source_id:path}/pcm")

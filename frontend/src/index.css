@@ -363,6 +363,10 @@ code,
   background: var(--amber);
 }
 
+.kind-dot.thermal {
+  background: #ff6b35;
+}
+
 .tile-actions {
   margin-left: auto;
   display: flex;
@@ -473,6 +477,123 @@ code,
   color: var(--amber);
   background: rgba(0, 0, 0, 0.55);
   padding: 2px 6px;
+}
+
+.thermal-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.thermal-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.thermal-scale {
+  margin: 8px 8px 0 4px;
+  border-radius: 99px;
+  background: linear-gradient(
+    to top,
+    #000004,
+    #1b0c41,
+    #4a0c6b,
+    #781c6d,
+    #a52c60,
+    #cf4446,
+    #ed6925,
+    #fb9b06,
+    #f7d13d,
+    #fcffa4
+  );
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.thermal-hud {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 8px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--text);
+  background: #080b10;
+}
+
+.thermal-hud em {
+  font-style: normal;
+  color: var(--muted);
+  margin-right: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+
+.thermal-spot {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  color: #7fdbff;
+}
+
+.thermal-spot.hot {
+  color: #ffd166;
+}
+
+.thermal-spot-mark {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-radius: 99px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75);
+  position: relative;
+}
+
+.thermal-spot-mark::before,
+.thermal-spot-mark::after {
+  content: '';
+  position: absolute;
+  background: currentColor;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75);
+}
+
+.thermal-spot-mark::before {
+  left: 50%;
+  top: -5px;
+  bottom: -5px;
+  width: 2px;
+  margin-left: -1px;
+}
+
+.thermal-spot-mark::after {
+  top: 50%;
+  left: -5px;
+  right: -5px;
+  height: 2px;
+  margin-top: -1px;
+}
+
+.thermal-spot-label {
+  position: absolute;
+  left: 12px;
+  top: -8px;
+  white-space: nowrap;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  line-height: 1.2;
+  color: inherit;
+  background: rgba(0, 0, 0, 0.72);
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+
+.thermal-spot.flip .thermal-spot-label {
+  left: auto;
+  right: 12px;
 }
 
 .timeline {

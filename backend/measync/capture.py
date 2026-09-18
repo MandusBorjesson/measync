@@ -27,7 +27,15 @@ class CaptureHandle:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        target = self._run_camera if self.kind == "camera" else self._run_audio
+        runners = {
+            "camera": self._run_camera,
+            "audio": self._run_audio,
+            "thermal": self._run_thermal,
+        }
+        target = runners.get(self.kind)
+        if target is None:
+            log.error("unknown source kind %s for %s", self.kind, self.source_id)
+            return
         self._thread = threading.Thread(target=target, args=(session,), name=self.source_id, daemon=True)
         self._thread.start()
 
@@ -71,6 +79,48 @@ class CaptureHandle:
         finally:
             cap.release()
             log.info("Camera %s stopped", self.source_id)
+
+    def _run_thermal(self, session: "Session") -> None:
+        try:
+            import cv2
+        except ImportError:
+            log.error("OpenCV missing; cannot capture %s", self.source_id)
+            return
+
+        from measync.thermal import decode_temperature, pack_snapshot, render_jpeg
+
+        cap = cv2.VideoCapture(self.index, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            log.error("Failed to open thermal camera %s", self.source_id)
+            return
+        cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 256)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 384)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
+        log.info("Thermal %s started", self.source_id)
+        try:
+            while not self._stop.is_set():
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    time.sleep(0.05)
+                    continue
+                temp = decode_temperature(frame)
+                if temp is None:
+                    log.debug("unexpected thermal frame shape %s", getattr(frame, "shape", None))
+                    time.sleep(0.05)
+                    continue
+                jpeg = render_jpeg(temp)
+                if not jpeg:
+                    continue
+                payload = pack_snapshot(temp, jpeg)
+                t_ns = time.monotonic_ns()
+                session.hub.publish(self.source_id, payload)
+                if session.recording:
+                    session.ring.append_camera(self.source_id, self.label, t_ns, payload, kind="thermal")
+                    session.dirty = True
+        finally:
+            cap.release()
+            log.info("Thermal %s stopped", self.source_id)
 
     def _run_audio(self, session: "Session") -> None:
         try:

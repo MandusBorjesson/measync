@@ -13,7 +13,7 @@ The product is not a general video editor, a multi-room service, or a per-user s
 ## Features
 
 - **Tiled mosaic** — binary-split layout; split, swap, dock, and resize panes. Layout is shared with every connected viewer.
-- **Live sources** — cameras and microphones today; other real-time and graph sources later.
+- **Live sources** — cameras, Infiray thermal cameras, and microphones today; other real-time and graph sources later.
 - **Live preview** — WebSocket fan-out of the latest sample per source.
 - **Record / Stop** — append into a capped RAM ring. Starting a recording clears the ring.
 - **Time-aligned eviction** — when the byte cap is exceeded, the oldest horizon is dropped from every track together.
@@ -30,14 +30,14 @@ Tiles are not camera/audio-specific. Every widget belongs to **exactly one** of 
 
 ### Real-time
 
-Discrete snapshots along the timeline. Examples: cameras today; text logs later.
+Discrete snapshots along the timeline. Examples: cameras and Infiray thermals today; text logs later.
 
 | Mode | Behavior |
 |------|----------|
 | Live (no capture under the playhead) | Stream the latest snapshot (`/ws/live/{source_id}`). |
 | Scrub / playback | Show the **closest snapshot** to the selected timestamp (timeline window centre). |
 
-Current implementation: [`frontend/src/widgets/CameraWidget.tsx`](../frontend/src/widgets/CameraWidget.tsx) with `GET /api/session/camera/{id}/frame?t=`.
+Current implementation: [`frontend/src/widgets/CameraWidget.tsx`](../frontend/src/widgets/CameraWidget.tsx) with `GET /api/session/camera/{id}/frame?t=`, and [`frontend/src/widgets/ThermalWidget.tsx`](../frontend/src/widgets/ThermalWidget.tsx) with `GET /api/session/thermal/{id}/frame?t=` (closest snapshot; live `/ws/live` payload is a `THRM` header plus JPEG).
 
 ### Graph
 
@@ -66,7 +66,7 @@ Browser (Vite :5173)
 
 - Backend: Python 3.11+, FastAPI, one global `Session` created in app lifespan.
 - Frontend: React 19, TypeScript, Vite 8. Dev server proxies `/api` and `/ws` to `127.0.0.1:8000`.
-- Capture is Linux-centric: V4L2 cameras (`/dev/video*`) and PortAudio mics.
+- Capture is Linux-centric: V4L2 cameras (`/dev/video*`), Infiray-family thermal UVC (256×384 YUYV), and PortAudio mics.
 - Persistence lives under repo-root `data/` (gitignored). Path is `backend/measync/main.py` → two parents up → `data/`.
 
 There is no production static serving, TLS, Docker, or multi-process session.
@@ -75,7 +75,7 @@ There is no production static serving, TLS, Docker, or multi-process session.
 
 ```mermaid
 flowchart TB
-  hw[Cameras and mics]
+  hw[Cameras, thermals, and mics]
   capture[CaptureHandle daemon threads]
   session[Session]
   hub[LiveHub]
@@ -110,10 +110,11 @@ flowchart TB
 | [`backend/measync/main.py`](../backend/measync/main.py) | FastAPI app, CORS, all HTTP and WebSocket routes. No capture or ring logic. |
 | [`backend/measync/session.py`](../backend/measync/session.py) | Orchestrator: recording flag, `dirty`, source handles, data dirs. |
 | [`backend/measync/capture.py`](../backend/measync/capture.py) | Per-source daemon thread. Always publishes live; appends to the ring only while `recording`. |
-| [`backend/measync/ring.py`](../backend/measync/ring.py) | `CamTrack` / `AudioTrack` / `RingBuffer`. Thread-locked; global time-aligned eviction. |
+| [`backend/measync/ring.py`](../backend/measync/ring.py) | `CamTrack` / `AudioTrack` / `RingBuffer`. Thread-locked; global time-aligned eviction. `CamTrack` holds camera JPEGs and thermal `THRM` snapshots (`kind` on the track). |
 | [`backend/measync/livehub.py`](../backend/measync/livehub.py) | Thread → asyncio fan-out. Per-source queues (`maxsize` 2); drop oldest on overflow. |
 | [`backend/measync/presence.py`](../backend/measync/presence.py) | Peers, viewport broadcast, shared layout (last writer wins). |
-| [`backend/measync/devices.py`](../backend/measync/devices.py) | Enumerate cameras and mics. |
+| [`backend/measync/devices.py`](../backend/measync/devices.py) | Enumerate cameras, Infiray thermals, and mics. |
+| [`backend/measync/thermal.py`](../backend/measync/thermal.py) | Infiray P2 Pro decode, colormap JPEG, snapshot packing. |
 | [`backend/measync/persist.py`](../backend/measync/persist.py) | Capture save/load under `data/captures/`. |
 | [`backend/measync/profiles.py`](../backend/measync/profiles.py) | Profile CRUD; `safe_name()` sanitization. |
 | [`backend/measync/models.py`](../backend/measync/models.py) | Pydantic request/response schemas. |
@@ -153,7 +154,7 @@ The server broadcasts peer lists and layout. The sender is excluded from layout 
 
 ### Persistence
 
-- Captures: `{name}/session.json` plus per-source folders (`camera_0`, `audio_1`, …) with numpy timestamps and binary payloads.
+- Captures: `{name}/session.json` plus per-source folders (`camera_0`, `thermal_2`, `audio_1`, …) with numpy timestamps and binary payloads.
 - Profiles: JSON under `data/profiles/`. Names are sanitized (`safe_name`: alphanumeric, `.`, `_`, `-`).
 - Opened captures become ring tracks with `live: false`; tiles show saved data without reopening the device.
 
@@ -166,7 +167,7 @@ Agents must not break these. If a feature needs to, change this document in the 
 3. **Time-aligned eviction** — the cap is global bytes; dropping data uses the same oldest horizon on every track. No per-track eviction.
 4. **Record clears the ring** — start recording wipes RAM. Warn if `dirty`.
 5. **No save/open while recording**.
-6. **Source IDs today** are `camera:<index>` or `audio:<index>`. New kinds should stay `{kind}:{index}` and be validated at the API boundary.
+6. **Source IDs today** are `camera:<index>`, `thermal:<index>`, or `audio:<index>`. New kinds should stay `{kind}:{index}` and be validated at the API boundary.
 7. **Widget family** — every new widget is real-time (closest snapshot) or graph (selected window). No third scrub model.
 8. **Live always streams; ring only while recording** — capture threads publish regardless of `recording`.
 9. **`main.py` is I/O only** — routes call `Session` / ring / persist / presence. Capture and eviction stay out of the router.
@@ -181,7 +182,7 @@ Agents must not break these. If a feature needs to, change this document in the 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/health` | `{ ok: true }` |
-| GET | `/api/devices` | Cameras and mics (busy cameras still listed) |
+| GET | `/api/devices` | Cameras, Infiray thermals, and mics (busy video devices still listed) |
 | GET | `/api/session` | Recording, `t_min`/`t_max`, RAM used/cap, `dirty`, sources |
 | PUT | `/api/session/cap` | Set `bytes_cap` (1 MB–64 GB) |
 | POST | `/api/session/start` | Clear ring, start recording |
@@ -189,6 +190,7 @@ Agents must not break these. If a feature needs to, change this document in the 
 | POST | `/api/sources/{source_id}` | Start capture thread |
 | DELETE | `/api/sources/{source_id}` | Stop capture, drop live hub |
 | GET | `/api/session/camera/{source_id}/frame?t=` | Nearest JPEG at timestamp (ns) |
+| GET | `/api/session/thermal/{source_id}/frame?t=` | Nearest thermal snapshot (`THRM` + JPEG) |
 | GET | `/api/session/audio/{source_id}/pcm?t0=&t1=` | Raw float32 PCM + `X-Sample-Rate` |
 | GET | `/api/session/audio/{source_id}/waveform?t0=&t1=` | Downsampled min/max envelope |
 | GET/POST/DELETE | `/api/profiles`, `/api/profiles/{name}` | List, save, load, delete |
@@ -203,6 +205,7 @@ New ring query endpoints for future widgets should follow the same split: a poin
 One connection per live tile.
 
 - Real-time camera today: **binary** JPEG frames.
+- Real-time thermal today: **binary** `THRM` header (`min`, `max`, `center` °C as little-endian float32, then hottest/coldest pixel `x,y` as uint16) followed by a colormap JPEG.
 - Graph audio today: **JSON** `{ t_ns, min, max, sample_rate }` per ~40 ms block.
 
 New live payloads should stay self-describing per source kind. Queues keep only the latest few samples (backpressure by dropping oldest).
@@ -245,7 +248,7 @@ Do not:
 - Put device I/O or ring mutation in `main.py`.
 - Assume auth, multi-tenant isolation, or durable RAM across backend restart.
 
-Tests today: `python -m measync.selftest` (ring eviction alignment, frame/waveform, persist round-trip). There is no pytest suite; extend `selftest.py` or add tests when changing ring/persist behavior.
+Tests today: `python -m measync.selftest` (ring eviction alignment, frame/waveform, thermal decode, persist round-trip). There is no pytest suite; extend `selftest.py` or add tests when changing ring/persist behavior.
 
 ## Module map
 

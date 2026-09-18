@@ -26,7 +26,7 @@ export function AddSourceModal({ tracks, onPick, onClose }: Props) {
       {error && <p className="error">{error}</p>}
       <p className="field">Live devices</p>
       <ul className="device-list">
-        {devices.length === 0 && <li>No cameras or microphones found.</li>}
+        {devices.length === 0 && <li>No cameras, thermal cameras, or microphones found.</li>}
         {devices.map((device) => (
           <li key={device.id}>
             <span>

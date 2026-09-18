@@ -1,4 +1,4 @@
-export type Kind = 'camera' | 'audio'
+export type Kind = 'camera' | 'audio' | 'thermal'
 export type SplitDir = 'h' | 'v'
 
 export type Device = {

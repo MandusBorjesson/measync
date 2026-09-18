@@ -4,17 +4,19 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+Kind = Literal["camera", "audio", "thermal"]
+
 
 class Device(BaseModel):
     id: str
-    kind: Literal["camera", "audio"]
+    kind: Kind
     label: str
     index: int
 
 
 class SourceInfo(BaseModel):
     id: str
-    kind: Literal["camera", "audio"]
+    kind: Kind
     label: str
     sample_rate: int | None = None
     live: bool = True

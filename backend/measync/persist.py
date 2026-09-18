@@ -58,7 +58,7 @@ def save_capture(ring: RingBuffer, dest_root: Path, name: str) -> dict:
         with (folder / "frames.bin").open("wb") as fh:
             for jpeg in track.jpeg[track.start :]:
                 fh.write(jpeg)
-        sources.append({"id": sid, "kind": "camera", "label": track.label})
+        sources.append({"id": sid, "kind": track.kind, "label": track.label})
 
     for sid, track in audios.items():
         if not len(track):
@@ -114,11 +114,11 @@ def load_capture(ring: RingBuffer, dest_root: Path, name: str) -> dict:
         sid = src["id"]
         folder = _source_dir(dest, sid)
         kind = src["kind"]
-        if kind == "camera":
+        if kind in {"camera", "thermal"}:
             ts = np.load(folder / "timestamps.npy")
             sizes = np.load(folder / "sizes.npy")
             blob = (folder / "frames.bin").read_bytes()
-            track = CamTrack(label=src.get("label") or sid)
+            track = CamTrack(label=src.get("label") or sid, kind=kind)
             offset = 0
             for t_ns, size in zip(ts.tolist(), sizes.tolist(), strict=True):
                 jpeg = blob[offset : offset + int(size)]
