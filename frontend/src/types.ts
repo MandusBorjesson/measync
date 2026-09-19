@@ -26,11 +26,23 @@ export type SessionStatus = {
   sources: SourceInfo[]
 }
 
+export type ThermalZone = {
+  id: string
+  name: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 export type TileSpec = {
   id: string
   sourceId: string
   kind: Kind
   label: string
+  zones?: ThermalZone[]
+  splitRatio?: number
+  showGraph?: boolean
 }
 
 export type Layout =
@@ -68,4 +80,12 @@ export type Waveform = {
   min: number[]
   max: number[]
   sample_rate: number
+}
+
+export type ThermalSeries = {
+  t: number[]
+  min: number[]
+  max: number[]
+  center: number[]
+  zones: { min: (number | null)[]; max: (number | null)[] }[]
 }

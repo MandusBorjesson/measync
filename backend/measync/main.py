@@ -176,6 +176,18 @@ def audio_waveform(source_id: str, t0: float, t1: float) -> dict:
     return env
 
 
+@app.get("/api/session/thermal/{source_id:path}/series")
+def thermal_series(source_id: str, t0: float, t1: float, zones: str | None = None) -> dict:
+    from measync.thermal import parse_zone_rects
+
+    series = session().ring.thermal_series(
+        source_id, int(round(t0)), int(round(t1)), parse_zone_rects(zones)
+    )
+    if series is None:
+        raise HTTPException(404, "no thermal")
+    return series
+
+
 @app.get("/api/profiles")
 def list_profiles() -> dict:
     return {"profiles": session().profiles.list()}

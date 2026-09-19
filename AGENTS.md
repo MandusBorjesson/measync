@@ -10,10 +10,11 @@ Lab workbench: tiled live sources, one shared RAM capture ring, independent time
 
 ## Widget families (required)
 
-Every tile is one of two families. New widgets must pick one; do not add a third scrub/playback model.
+Widgets are built from two playback models. Most tiles use one; hybrid tiles compose both. Do not add a third scrub/playback model.
 
-- **Real-time** (cameras and Infiray thermals today; text logs later) — closest **snapshot** to the selected timestamp (window centre).
+- **Real-time** (cameras today; text logs later) — closest **snapshot** to the selected timestamp (window centre).
 - **Graph** (audio today; current/voltage later) — render the **selected window**, centered on that timestamp.
+- **Hybrid** (Infiray thermals today) — snapshot on top, selected-window graph below. Same two query types, one tile.
 
 Live preview still uses `/ws/live/{source_id}`. Scrub/playback uses HTTP ring queries (point query vs range query).
 

@@ -1,4 +1,4 @@
-import type { Device, Profile, SavedCapture, SessionStatus, Waveform } from './types'
+import type { Device, Profile, SavedCapture, SessionStatus, ThermalSeries, Waveform } from './types'
 
 async function parseError(res: Response): Promise<string> {
   try {
@@ -48,6 +48,21 @@ export async function startSource(sourceId: string): Promise<void> {
 
 export async function stopSource(sourceId: string): Promise<void> {
   await json(await fetch(`/api/sources/${encodeURIComponent(sourceId)}`, { method: 'DELETE' }))
+}
+
+export async function fetchThermalSeries(
+  sourceId: string,
+  t0: number,
+  t1: number,
+  zones: { x: number; y: number; w: number; h: number }[] = [],
+): Promise<ThermalSeries> {
+  const q = new URLSearchParams({ t0: String(Math.round(t0)), t1: String(Math.round(t1)) })
+  if (zones.length) {
+    q.set('zones', zones.map((z) => `${z.x},${z.y},${z.w},${z.h}`).join(';'))
+  }
+  return json<ThermalSeries>(
+    await fetch(`/api/session/thermal/${encodeURIComponent(sourceId)}/series?${q}`),
+  )
 }
 
 export async function fetchWaveform(sourceId: string, t0: number, t1: number): Promise<Waveform> {

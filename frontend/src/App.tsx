@@ -493,6 +493,13 @@ export default function App() {
             }}
             onClose={closeTile}
             onLayout={setLayout}
+            onTileChange={(id, patch) => {
+              setTiles((prev) => {
+                const tile = prev[id]
+                if (!tile) return prev
+                return { ...prev, [id]: { ...tile, ...patch } }
+              })
+            }}
           />
         ) : (
           <div className="empty-workspace">

@@ -480,15 +480,44 @@ code,
 }
 
 .thermal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.thermal-upper,
+.thermal-lower {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.thermal-upper {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 14px;
   grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.thermal-gutter {
+  flex: 0 0 8px;
+  cursor: row-resize;
+}
+
+.thermal-gutter::after {
+  inset: -5px 0;
+}
+
+.thermal-lower {
+  position: relative;
 }
 
 .thermal-stage {
   position: relative;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+  cursor: crosshair;
+  user-select: none;
 }
 
 .thermal-scale {
@@ -533,7 +562,7 @@ code,
 
 .thermal-spot {
   position: absolute;
-  z-index: 2;
+  z-index: 4;
   pointer-events: none;
   transform: translate(-50%, -50%);
   color: #7fdbff;
@@ -594,6 +623,201 @@ code,
 .thermal-spot.flip .thermal-spot-label {
   left: auto;
   right: 12px;
+}
+
+.thermal-spot-mark.small {
+  width: 9px;
+  height: 9px;
+  border-width: 1px;
+}
+
+.thermal-hud-hint {
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: auto;
+}
+
+.thermal-hud-btn {
+  appearance: none;
+  margin: 0;
+  padding: 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.thermal-hud-btn:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.thermal-hud-btn.off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.thermal-zone {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  cursor: move;
+}
+
+.thermal-zone.selected {
+  border-width: 2px;
+}
+
+.thermal-zone.draft {
+  pointer-events: none;
+  border-style: dashed;
+}
+
+.thermal-zone-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translateY(-100%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  line-height: 1.2;
+  color: inherit;
+  background: rgba(0, 0, 0, 0.78);
+  padding: 1px 5px;
+  pointer-events: auto;
+  cursor: text;
+  white-space: nowrap;
+}
+
+.thermal-zone-input {
+  width: 56px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+}
+
+.thermal-zone-x {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 0 0 2px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.thermal-zone-handle {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 9px;
+  height: 9px;
+  background: currentColor;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+  cursor: nwse-resize;
+}
+
+.thermal-graph {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #080b10;
+}
+
+.thermal-graph-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.thermal-zone.muted {
+  opacity: 0.35;
+}
+
+.thermal-legend {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  max-width: 72%;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--text);
+  background: rgba(8, 11, 16, 0.72);
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+
+.thermal-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  padding: 1px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.thermal-legend-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.thermal-legend-item.off {
+  opacity: 0.38;
+  text-decoration: line-through;
+}
+
+.thermal-legend-swatch {
+  width: 12px;
+  height: 2px;
+  background: currentColor;
+}
+
+.thermal-legend-swatch.dashed {
+  background: repeating-linear-gradient(
+    90deg,
+    currentColor 0 4px,
+    transparent 4px 7px
+  );
+}
+
+.thermal-graph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .timeline {

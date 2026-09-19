@@ -59,6 +59,69 @@ class CamTrack:
             return self.jpeg[before]
         return self.jpeg[i]
 
+    def series(self, t0: int, t1: int, zones: list | None = None, max_points: int = 2000) -> dict:
+        from measync.thermal import peek_coarse, peek_stats, series_point
+
+        rects = list(zones or ())
+        empty_zones = [{"min": [], "max": []} for _ in rects]
+        empty = {"t": [], "min": [], "max": [], "center": [], "zones": empty_zones}
+        if self.start >= len(self.t):
+            return empty
+        i0 = bisect_left(self.t, t0, self.start)
+        i1 = bisect_left(self.t, t1, self.start)
+        i0 = max(i0, self.start)
+        i1 = max(i1, i0)
+        span = i1 - i0
+        if span <= 0:
+            return empty
+        cap = 400 if rects else max_points
+        if rects and peek_coarse(self.jpeg[i0]) is None:
+            cap = 120
+        step = max(1, span // cap)
+        ts: list[int] = []
+        mins: list[float] = []
+        maxs: list[float] = []
+        centers: list[float] = []
+        zone_mins: list[list[float | None]] = [[] for _ in rects]
+        zone_maxs: list[list[float | None]] = [[] for _ in rects]
+        for i in range(i0, i1, step):
+            j = min(i + step, i1)
+            bucket_min: float | None = None
+            bucket_max: float | None = None
+            bucket_center: float | None = None
+            sample_index: int | None = None
+            for k in range(i, j):
+                stats = peek_stats(self.jpeg[k])
+                if stats is None:
+                    continue
+                lo, hi, mid = stats
+                bucket_min = lo if bucket_min is None else min(bucket_min, lo)
+                bucket_max = hi if bucket_max is None else max(bucket_max, hi)
+                bucket_center = mid
+                if sample_index is None:
+                    sample_index = k
+            if bucket_min is None or bucket_max is None or bucket_center is None:
+                continue
+            ts.append(self.t[i])
+            mins.append(bucket_min)
+            maxs.append(bucket_max)
+            centers.append(bucket_center)
+            zone_vals: list[tuple[float | None, float | None]] = [(None, None) for _ in rects]
+            if rects and sample_index is not None:
+                point = series_point(self.jpeg[sample_index], rects)
+                if point is not None:
+                    zone_vals = [(z["min"], z["max"]) for z in point["zones"]]
+            for idx, (lo, hi) in enumerate(zone_vals):
+                zone_mins[idx].append(lo)
+                zone_maxs[idx].append(hi)
+        return {
+            "t": ts,
+            "min": mins,
+            "max": maxs,
+            "center": centers,
+            "zones": [{"min": zone_mins[i], "max": zone_maxs[i]} for i in range(len(zone_mins))],
+        }
+
 
 @dataclass
 class AudioTrack:
@@ -211,6 +274,19 @@ class RingBuffer:
             if track is None:
                 return None
             return track.envelope(t0, t1)
+
+    def thermal_series(
+        self,
+        source_id: str,
+        t0: int,
+        t1: int,
+        zones: list | None = None,
+    ) -> dict | None:
+        with self.lock:
+            track = self.camera.get(source_id)
+            if track is None or track.kind != "thermal":
+                return None
+            return track.series(t0, t1, zones)
 
     def track_meta(self) -> list[dict]:
         with self.lock:

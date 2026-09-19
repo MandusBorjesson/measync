@@ -21,6 +21,7 @@ type Props = {
   onSplit: (id: string, dir: 'h' | 'v') => void
   onClose: (id: string) => void
   onLayout: (layout: Layout) => void
+  onTileChange: (id: string, patch: Partial<TileSpec>) => void
 }
 
 export function Mosaic(props: Props) {
@@ -152,6 +153,14 @@ function Node(
             recording={props.recording}
             center={props.center}
             origin={props.origin}
+            t0={t0}
+            t1={t1}
+            zones={tile.zones}
+            splitRatio={tile.splitRatio}
+            showGraph={tile.showGraph !== false}
+            onZonesChange={(zones) => props.onTileChange(tile.id, { zones })}
+            onSplitRatioChange={(splitRatio) => props.onTileChange(tile.id, { splitRatio })}
+            onShowGraphChange={(showGraph) => props.onTileChange(tile.id, { showGraph })}
           />
         ) : (
           <CameraWidget

@@ -41,7 +41,14 @@ def test_frame_and_waveform_and_roundtrip(tmp_path: Path):
 
 
 def test_thermal_decode_and_persist(tmp_path: Path):
-    from measync.thermal import decode_temperature, pack_snapshot, unpack_snapshot
+    from measync.thermal import (
+        SNAPSHOT_HEADER_V1,
+        SNAPSHOT_MAGIC,
+        decode_temperature,
+        pack_snapshot,
+        unpack_snapshot,
+        zone_extrema,
+    )
 
     frame = np.zeros((384, 256, 2), dtype=np.uint8)
     raw = int(round((25.0 + 273.15) * 64))
@@ -63,9 +70,34 @@ def test_thermal_decode_and_persist(tmp_path: Path):
     assert unpacked.jpeg == b"\xff\xd8fakejpeg"
     assert unpacked.max_x == 10 and unpacked.max_y == 0
     assert unpacked.min_x == 0 and unpacked.min_y == 0
+    assert unpacked.temp is not None
+    assert abs(float(unpacked.temp[0, 10]) - 40.0) < 0.02
+    extra = zone_extrema(unpacked.temp, 8, 0, 6, 4)
+    assert extra is not None
+    assert abs(extra[1] - 40.0) < 0.02
+    assert extra[4] == 10 and extra[5] == 0
+    from measync.thermal import peek_coarse, zone_extrema_coarse
+
+    grid = peek_coarse(payload)
+    assert grid is not None
+    zc = zone_extrema_coarse(grid[0], grid[1], 8, 0, 6, 4)
+    assert zc is not None and abs(zc[1] - 40.0) < 0.5
+
+    legacy = SNAPSHOT_HEADER_V1.pack(SNAPSHOT_MAGIC, 25.0, 40.0, 25.0, 0, 0, 10, 0) + b"\xff\xd8old"
+    old = unpack_snapshot(legacy)
+    assert old is not None and old.jpeg == b"\xff\xd8old" and old.temp is None
 
     ring = RingBuffer(cap_bytes=10_000_000)
-    ring.append_camera("thermal:2", "Infiray P2 Pro (2)", 1000, payload, kind="thermal")
+    for i in range(5):
+        ring.append_camera("thermal:2", "Infiray P2 Pro (2)", 1000 + i * 100, payload, kind="thermal")
+    series = ring.thermal_series("thermal:2", 1000, 2000, zones=[(8, 0, 6, 4), (100, 80, 10, 10)])
+    assert series is not None and len(series["t"]) == 5
+    assert abs(series["max"][0] - 40.0) < 0.05
+    assert abs(series["min"][0] - 25.0) < 0.05
+    assert abs(series["center"][0] - 25.0) < 0.05
+    assert abs(series["zones"][0]["max"][0] - 40.0) < 0.05
+    assert abs(series["zones"][1]["max"][0] - 25.0) < 0.05
+
     meta = save_capture(ring, tmp_path, "thermal-take")
     assert meta["sources"][0]["kind"] == "thermal"
     other = RingBuffer(cap_bytes=10_000_000)
@@ -73,6 +105,8 @@ def test_thermal_decode_and_persist(tmp_path: Path):
     assert loaded["name"] == "thermal-take"
     assert other.camera["thermal:2"].kind == "thermal"
     assert other.camera_frame("thermal:2", 1000) == payload
+    loaded_series = other.thermal_series("thermal:2", 1000, 2000, zones=[(8, 0, 6, 4)])
+    assert loaded_series is not None and abs(loaded_series["zones"][0]["max"][0] - 40.0) < 0.05
 
 
 if __name__ == "__main__":

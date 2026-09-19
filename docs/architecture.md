@@ -13,7 +13,7 @@ The product is not a general video editor, a multi-room service, or a per-user s
 ## Features
 
 - **Tiled mosaic** — binary-split layout; split, swap, dock, and resize panes. Layout is shared with every connected viewer.
-- **Live sources** — cameras, Infiray thermal cameras, and microphones today; other real-time and graph sources later.
+- **Live sources** — cameras, Infiray thermal cameras (hybrid feed + graph), and microphones today; other real-time and graph sources later.
 - **Live preview** — WebSocket fan-out of the latest sample per source.
 - **Record / Stop** — append into a capped RAM ring. Starting a recording clears the ring.
 - **Time-aligned eviction** — when the byte cap is exceeded, the oldest horizon is dropped from every track together.
@@ -26,18 +26,18 @@ Unsaved RAM captures are discarded when you Record again or stop the backend.
 
 ## Widget families
 
-Tiles are not camera/audio-specific. Every widget belongs to **exactly one** of two families. New source types extend one of these; do not invent a third playback model.
+Tiles are not camera/audio-specific. Every widget is built from two playback models. Most tiles use exactly one; **hybrid** tiles compose both in one pane. Do not invent a third scrub model (for example “fit entire take”).
 
 ### Real-time
 
-Discrete snapshots along the timeline. Examples: cameras and Infiray thermals today; text logs later.
+Discrete snapshots along the timeline. Examples: cameras today; text logs later.
 
 | Mode | Behavior |
 |------|----------|
 | Live (no capture under the playhead) | Stream the latest snapshot (`/ws/live/{source_id}`). |
 | Scrub / playback | Show the **closest snapshot** to the selected timestamp (timeline window centre). |
 
-Current implementation: [`frontend/src/widgets/CameraWidget.tsx`](../frontend/src/widgets/CameraWidget.tsx) with `GET /api/session/camera/{id}/frame?t=`, and [`frontend/src/widgets/ThermalWidget.tsx`](../frontend/src/widgets/ThermalWidget.tsx) with `GET /api/session/thermal/{id}/frame?t=` (closest snapshot; live `/ws/live` payload is a `THRM` header plus JPEG).
+Current implementation: [`frontend/src/widgets/CameraWidget.tsx`](../frontend/src/widgets/CameraWidget.tsx) with `GET /api/session/camera/{id}/frame?t=`.
 
 ### Graph
 
@@ -49,6 +49,19 @@ Continuous series over a window. Examples: audio envelope today; current/voltage
 | Scrub / playback | Render the **currently selected window**, centered on the selected timestamp (`t0`–`t1`). |
 
 Current implementation: [`frontend/src/widgets/AudioWidget.tsx`](../frontend/src/widgets/AudioWidget.tsx) with `GET /api/session/audio/{id}/waveform?t0=&t1=` (display) and PCM for playback.
+
+### Hybrid
+
+One tile, two queries: a real-time snapshot on top and a graph of the selected window below. Infiray thermals are the first hybrid widget.
+
+| Pane | Behavior |
+|------|----------|
+| Upper (image) | Same as real-time: live `/ws/live` or closest snapshot `GET /api/session/thermal/{id}/frame?t=`. |
+| Lower (graph) | Same as graph: rolling live preview, or `GET /api/session/thermal/{id}/series?t0=&t1=` for the selected window. Optional `zones=x,y,w,h;…` (sensor pixels) adds per-zone min/max series. |
+
+Users drag rectangles on the feed to mark zones. Each zone shows local min/max on the image; the graph plots those traces next to global min / max / center, with legend labels. Zone geometry lives on the tile spec (presence/layout), not in the ring.
+
+Current implementation: [`frontend/src/widgets/ThermalWidget.tsx`](../frontend/src/widgets/ThermalWidget.tsx). Live `/ws/live` payload is a `THRM` snapshot: header, colormap JPEG, and a zlib temperature map used for zone stats.
 
 Widgets switch to HTTP ring queries whenever the viewer is scrubbing, playing, or has capture data under the playhead (`followStream = live && !playing && !hasCapture`).
 
@@ -110,11 +123,11 @@ flowchart TB
 | [`backend/measync/main.py`](../backend/measync/main.py) | FastAPI app, CORS, all HTTP and WebSocket routes. No capture or ring logic. |
 | [`backend/measync/session.py`](../backend/measync/session.py) | Orchestrator: recording flag, `dirty`, source handles, data dirs. |
 | [`backend/measync/capture.py`](../backend/measync/capture.py) | Per-source daemon thread. Always publishes live; appends to the ring only while `recording`. |
-| [`backend/measync/ring.py`](../backend/measync/ring.py) | `CamTrack` / `AudioTrack` / `RingBuffer`. Thread-locked; global time-aligned eviction. `CamTrack` holds camera JPEGs and thermal `THRM` snapshots (`kind` on the track). |
+| [`backend/measync/ring.py`](../backend/measync/ring.py) | `CamTrack` / `AudioTrack` / `RingBuffer`. Thread-locked; global time-aligned eviction. `CamTrack` holds camera JPEGs and thermal `THRM` snapshots (`kind` on the track) and can emit a thermal temperature series. |
 | [`backend/measync/livehub.py`](../backend/measync/livehub.py) | Thread → asyncio fan-out. Per-source queues (`maxsize` 2); drop oldest on overflow. |
 | [`backend/measync/presence.py`](../backend/measync/presence.py) | Peers, viewport broadcast, shared layout (last writer wins). |
 | [`backend/measync/devices.py`](../backend/measync/devices.py) | Enumerate cameras, Infiray thermals, and mics. |
-| [`backend/measync/thermal.py`](../backend/measync/thermal.py) | Infiray P2 Pro decode, colormap JPEG, snapshot packing. |
+| [`backend/measync/thermal.py`](../backend/measync/thermal.py) | Infiray P2 Pro decode, colormap JPEG, snapshot packing, zone extrema, series points. |
 | [`backend/measync/persist.py`](../backend/measync/persist.py) | Capture save/load under `data/captures/`. |
 | [`backend/measync/profiles.py`](../backend/measync/profiles.py) | Profile CRUD; `safe_name()` sanitization. |
 | [`backend/measync/models.py`](../backend/measync/models.py) | Pydantic request/response schemas. |
@@ -141,6 +154,7 @@ Timestamps are `time.monotonic_ns()` integers, shared across tracks.
 
 - Real-time widgets query a single timestamp (`t` = window centre) and display the nearest snapshot.
 - Graph widgets query `[t0, t1]` for the visible window (centred on the selected timestamp).
+- Hybrid widgets do both in one tile (thermal: closest snapshot + windowed temperature series).
 - Audio playback fetches raw float32 PCM chunks over HTTP (`X-Sample-Rate` header).
 
 ### Presence and layout
@@ -168,7 +182,7 @@ Agents must not break these. If a feature needs to, change this document in the 
 4. **Record clears the ring** — start recording wipes RAM. Warn if `dirty`.
 5. **No save/open while recording**.
 6. **Source IDs today** are `camera:<index>`, `thermal:<index>`, or `audio:<index>`. New kinds should stay `{kind}:{index}` and be validated at the API boundary.
-7. **Widget family** — every new widget is real-time (closest snapshot) or graph (selected window). No third scrub model.
+7. **Widget family** — every widget is real-time (closest snapshot), graph (selected window), or hybrid (both in one tile). No third scrub model.
 8. **Live always streams; ring only while recording** — capture threads publish regardless of `recording`.
 9. **`main.py` is I/O only** — routes call `Session` / ring / persist / presence. Capture and eviction stay out of the router.
 10. **Capture on daemon threads; asyncio for WebSockets** — `LiveHub.publish` uses `call_soon_threadsafe`. Do not block the event loop on device I/O.
@@ -190,7 +204,8 @@ Agents must not break these. If a feature needs to, change this document in the 
 | POST | `/api/sources/{source_id}` | Start capture thread |
 | DELETE | `/api/sources/{source_id}` | Stop capture, drop live hub |
 | GET | `/api/session/camera/{source_id}/frame?t=` | Nearest JPEG at timestamp (ns) |
-| GET | `/api/session/thermal/{source_id}/frame?t=` | Nearest thermal snapshot (`THRM` + JPEG) |
+| GET | `/api/session/thermal/{source_id}/frame?t=` | Nearest thermal snapshot (`THRM` + JPEG + temp map) |
+| GET | `/api/session/thermal/{source_id}/series?t0=&t1=` | Windowed min/max/center series; optional `zones=x,y,w,h;…` |
 | GET | `/api/session/audio/{source_id}/pcm?t0=&t1=` | Raw float32 PCM + `X-Sample-Rate` |
 | GET | `/api/session/audio/{source_id}/waveform?t0=&t1=` | Downsampled min/max envelope |
 | GET/POST/DELETE | `/api/profiles`, `/api/profiles/{name}` | List, save, load, delete |
@@ -205,7 +220,7 @@ New ring query endpoints for future widgets should follow the same split: a poin
 One connection per live tile.
 
 - Real-time camera today: **binary** JPEG frames.
-- Real-time thermal today: **binary** `THRM` header (`min`, `max`, `center` °C as little-endian float32, then hottest/coldest pixel `x,y` as uint16) followed by a colormap JPEG.
+- Hybrid thermal today: **binary** `THRM` snapshot. Current header is min/max/center °C, hottest/coldest pixel `x,y`, `jpeg_len`, `temp_len`, then the colormap JPEG, a zlib little-endian int16 map (`°C × 100`, 192×256), and a 32×24 uncompressed min/max grid for cheap zone series. Older captures may omit the temperature map and/or coarse grid.
 - Graph audio today: **JSON** `{ t_ns, min, max, sample_rate }` per ~40 ms block.
 
 New live payloads should stay self-describing per source kind. Queues keep only the latest few samples (backpressure by dropping oldest).
@@ -237,14 +252,14 @@ Keep:
 - Single-process session and monotonic-ns ring.
 - Daemon-thread capture, asyncio WebSockets.
 - Time-aligned global eviction.
-- Real-time vs graph widget contract.
+- Real-time vs graph vs hybrid-as-composition widget contract.
 - Types mirrored across Python and TypeScript.
 
 Do not:
 
 - Add a second session, room, or time base.
 - Evict tracks independently.
-- Serve a third widget playback model (for example “fit entire take” or “page of log lines” that ignores window centre).
+- Serve a third widget playback model (for example “fit entire take” or “page of log lines” that ignores window centre). Hybrid tiles must still use closest-snapshot plus selected-window.
 - Put device I/O or ring mutation in `main.py`.
 - Assume auth, multi-tenant isolation, or durable RAM across backend restart.
 
@@ -256,6 +271,6 @@ Tests today: `python -m measync.selftest` (ring eviction alignment, frame/wavefo
 backend/measync/     FastAPI package
 frontend/src/         React UI
   components/         Mosaic, timeline, menus
-  widgets/            Real-time and graph tiles
+  widgets/            Real-time, graph, and hybrid tiles
 data/                 Runtime captures and profiles (not in git)
 ```
