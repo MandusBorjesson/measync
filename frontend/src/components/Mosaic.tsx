@@ -17,9 +17,13 @@ type Props = {
   hasCapture?: boolean
   recording?: boolean
   center: number | null
+  windowCenter?: number | null
   origin: number | null
   tMax: number | null
   duration: number
+  showMarker?: boolean
+  playing?: boolean
+  playRate?: number
   onFocus: (id: string) => void
   onSplit: (id: string, dir: 'h' | 'v') => void
   onClose: (id: string) => void
@@ -68,7 +72,14 @@ function Node(
     const tile = props.tiles[node.id]
     if (!tile) return null
     const win =
-      props.center == null ? null : visibleRange(props.center, props.duration, props.origin ?? null, props.tMax ?? null)
+      (props.windowCenter ?? props.center) == null
+        ? null
+        : visibleRange(
+            props.windowCenter ?? props.center ?? 0,
+            props.duration,
+            props.origin ?? null,
+            props.tMax ?? null,
+          )
     const t0 = win?.t0 ?? null
     const t1 = win?.t1 ?? null
     const highlighted = props.over?.id === tile.id
@@ -152,6 +163,9 @@ function Node(
             rangeMax={props.tMax}
             onScrub={props.onScrub}
             plotPoints={props.plotPoints}
+            showMarker={props.showMarker}
+            playing={props.playing}
+            playRate={props.playRate}
             online={props.sources?.find((src) => src.id === tile.sourceId)?.online !== false}
           />
         ) : tile.kind === 'thermal' ? (
@@ -177,6 +191,7 @@ function Node(
             onSplitRatioChange={(splitRatio) => props.onTileChange(tile.id, { splitRatio })}
             onShowGraphChange={(showGraph) => props.onTileChange(tile.id, { showGraph })}
             plotPoints={props.plotPoints}
+            showMarker={props.showMarker}
           />
         ) : tile.kind === 'joulescope' ? (
           <JoulescopeWidget
@@ -197,6 +212,7 @@ function Node(
             source={props.sources?.find((src) => src.id === tile.sourceId)}
             onChannelsChange={(channels) => props.onTileChange(tile.id, { channels })}
             plotPoints={props.plotPoints}
+            showMarker={props.showMarker}
           />
         ) : (
           <CameraWidget

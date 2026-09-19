@@ -23,6 +23,7 @@ type Props = {
   source?: SourceInfo
   onChannelsChange?: (channels: JoulescopeChannel[]) => void
   plotPoints?: number
+  showMarker?: boolean
 }
 
 const CHANNELS: { id: JoulescopeChannel; label: string; unit: string; color: string }[] = [
@@ -55,6 +56,7 @@ export function JoulescopeWidget({
   source,
   onChannelsChange,
   plotPoints,
+  showMarker = false,
 }: Props) {
   const rangeRef = useRef({ t0, t1, live, plotPoints })
   const [series, setSeries] = useState<JoulescopeSeries>(EMPTY)
@@ -94,7 +96,7 @@ export function JoulescopeWidget({
           await new Promise((resolve) => window.setTimeout(resolve, 16))
           continue
         }
-        if (isLive && now - lastFetch < LIVE_FETCH_MS) {
+        if (now - lastFetch < LIVE_FETCH_MS) {
           await new Promise((resolve) => window.setTimeout(resolve, LIVE_FETCH_MS - (now - lastFetch)))
           continue
         }
@@ -221,6 +223,7 @@ export function JoulescopeWidget({
             legend={false}
             sampleDots={!!series.raw}
             yLabel={pane.unit}
+            showMarker={showMarker}
           />
         ))}
       </div>

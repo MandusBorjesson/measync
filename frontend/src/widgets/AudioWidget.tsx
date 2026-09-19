@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchWaveform } from '../api'
+import { playCaptureAudio } from '../audioReplay'
 import { LIVE_FETCH_MS, type GraphLine } from '../graph'
 import { queryWindow, type Viewport } from '../viewport'
 import { GraphPlot } from './GraphPlot'
@@ -22,6 +23,9 @@ type Props = {
   onScrub?: (next: Viewport) => void
   plotPoints?: number
   online?: boolean
+  showMarker?: boolean
+  playing?: boolean
+  playRate?: number
 }
 
 const LINE_ID = 'amplitude'
@@ -51,6 +55,9 @@ export function AudioWidget({
   onScrub,
   plotPoints,
   online = true,
+  showMarker = false,
+  playing = false,
+  playRate = 1,
 }: Props) {
   const rangeRef = useRef({ t0, t1, live, plotPoints })
   const [points, setPoints] = useState<BandPoint[]>([])
@@ -77,7 +84,7 @@ export function AudioWidget({
           await new Promise((resolve) => window.setTimeout(resolve, 16))
           continue
         }
-        if (isLive && now - lastFetch < LIVE_FETCH_MS) {
+        if (now - lastFetch < LIVE_FETCH_MS) {
           await new Promise((resolve) => window.setTimeout(resolve, LIVE_FETCH_MS - (now - lastFetch)))
           continue
         }
@@ -107,6 +114,16 @@ export function AudioWidget({
     }
   }, [sourceId, plotPoints])
 
+  const playheadRef = useRef(center)
+  playheadRef.current = center
+
+  useEffect(() => {
+    if (!playing || rangeMax == null) return
+    const from = playheadRef.current
+    if (from == null) return
+    return playCaptureAudio(sourceId, from, rangeMax, playRate)
+  }, [playing, playRate, sourceId, rangeMax])
+
   const lines = useMemo(() => [toLine(points)], [points])
 
   return (
@@ -128,6 +145,7 @@ export function AudioWidget({
         sampleDots={raw}
         yLabel=""
         emptyHint=""
+        showMarker={showMarker}
       />
       {!online ? (
         <div className="stamp offline">OFFLINE</div>

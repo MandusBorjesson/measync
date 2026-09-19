@@ -1,5 +1,6 @@
 export const MIN_DURATION_NS = 20_000_000
 export const DEFAULT_DURATION_NS = 2_000_000_000
+export const PLAY_RATES = [0.25, 0.5, 1, 2, 4, 8] as const
 
 export type TimeRange = {
   tMin: number | null
@@ -124,6 +125,19 @@ export function applyPanDelta(
 ): Viewport {
   const dt = -((clientX - startX) / Math.max(1, plotWidth)) * viewSpan
   return applyLocks(startCenter + dt, duration, tMin, tMax, false, false)
+}
+
+export function advancePlayhead(
+  from: number,
+  elapsedMs: number,
+  rate: number,
+  tMin: number,
+  tMax: number,
+): { t: number; done: boolean } {
+  const next = from + elapsedMs * 1e6 * rate
+  if (next >= tMax) return { t: tMax, done: true }
+  if (next <= tMin) return { t: tMin, done: false }
+  return { t: next, done: false }
 }
 
 export function queryWindow(t0: number | null, t1: number | null): { t0: number; t1: number } | null {

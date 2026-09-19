@@ -171,6 +171,14 @@ def test_frame_and_waveform_and_roundtrip(tmp_path: Path):
     assert meta["bytes_used"] == other.used
 
 
+def test_pcm_range_trims_to_window():
+    ring = RingBuffer(cap_bytes=10_000_000)
+    ring.append_audio("audio:0", "mic", 1000, 9_000_000, np.arange(10, dtype=np.float32))
+    rate, pcm = ring.audio_pcm("audio:0", 3_000_000, 5_000_000)
+    assert rate == 1000
+    assert list(pcm) == [3.0, 4.0, 5.0]
+
+
 def test_thermal_decode_and_persist(tmp_path: Path):
     from measync.thermal import (
         SNAPSHOT_HEADER_V1,
@@ -610,6 +618,7 @@ if __name__ == "__main__":
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir()
     test_frame_and_waveform_and_roundtrip(dest)
+    test_pcm_range_trims_to_window()
     thermal_dest = dest / "thermal"
     thermal_dest.mkdir()
     test_thermal_decode_and_persist(thermal_dest)

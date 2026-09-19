@@ -302,20 +302,29 @@ class AudioTrack:
         return self.t[-1] if self.start < len(self.t) else None
 
     def pcm_range(self, t0: int, t1: int) -> tuple[int, np.ndarray]:
+        empty = np.zeros(0, dtype=np.float32)
         if self.start >= len(self.t):
-            return self.sample_rate, np.zeros(0, dtype=np.float32)
-        i0 = bisect_left(self.t, t0, self.start)
-        i1 = bisect_right(self.t, t1, self.start)
-        if i0 > self.start:
-            i0 -= 1
-        i0 = max(i0, self.start)
-        i1 = max(i1, i0)
+            return self.sample_rate, empty
+        i0, i1 = _chunks_overlapping(self.t, self.start, t0, t1)
         if i1 <= i0:
-            return self.sample_rate, np.zeros(0, dtype=np.float32)
-        chunks = self.pcm[i0:i1]
-        if not chunks:
-            return self.sample_rate, np.zeros(0, dtype=np.float32)
-        return self.sample_rate, np.ascontiguousarray(np.concatenate(chunks), dtype=np.float32)
+            return self.sample_rate, empty
+        ts_parts: list[np.ndarray] = []
+        ys_parts: list[np.ndarray] = []
+        for i in range(i0, i1):
+            chunk = self.pcm[i]
+            n = int(chunk.size)
+            if n <= 0:
+                continue
+            ts_parts.append(_sample_times(self.t[i], n, self.sample_rate))
+            ys_parts.append(chunk)
+        if not ts_parts:
+            return self.sample_rate, empty
+        ts = np.concatenate(ts_parts)
+        ys = np.concatenate(ys_parts)
+        keep = (ts >= t0) & (ts <= t1)
+        if not np.any(keep):
+            return self.sample_rate, empty
+        return self.sample_rate, np.ascontiguousarray(ys[keep], dtype=np.float32)
 
     def envelope(self, t0: int, t1: int, max_points: int = GRAPH_POINTS) -> dict:
         empty = {"t": [], "mean": [], "min": [], "max": [], "sample_rate": self.sample_rate, "raw": False}

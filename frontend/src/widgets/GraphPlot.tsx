@@ -82,6 +82,7 @@ type Props = {
   legend?: boolean
   sampleDots?: boolean
   formatTick?: (value: number) => string
+  showMarker?: boolean
 }
 
 function yBounds(lines: GraphLine[]): [number, number] | null {
@@ -144,6 +145,7 @@ function draw(
   yHold?: { octave: number; bounds: [number, number] | null },
   sampleDots?: boolean,
   rangeMin?: number | null,
+  showMarker?: boolean,
 ) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
@@ -320,8 +322,14 @@ function draw(
     ctx.globalAlpha = 1
   }
 
-  const playT = lockFront && lockBack ? null : lockFront ? view1 : center
-  if (playT != null) {
+  const playT = showMarker
+    ? center
+    : lockFront && lockBack
+      ? null
+      : lockFront
+        ? view1
+        : center
+  if (playT != null && playT >= view0 && playT <= view1) {
     const x = Math.min(padL + plotW, Math.max(padL, xOf(playT)))
     ctx.strokeStyle = '#ff3b4e'
     ctx.lineWidth = Math.max(2, dpr)
@@ -396,17 +404,44 @@ export function GraphPlot({
   legend = true,
   sampleDots = false,
   formatTick,
+  showMarker = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const visible = lines.filter((line) => !hidden?.[line.id])
-  const dataRef = useRef({ t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin })
+  const dataRef = useRef({
+    t,
+    visible,
+    t0,
+    t1,
+    center,
+    lockFront,
+    lockBack,
+    yLabel,
+    formatTick,
+    sampleDots,
+    rangeMin,
+    showMarker,
+  })
   const yHoldRef = useRef({ octave: 0, bounds: null as [number, number] | null })
   const scrubRef = useRef({ center, duration, rangeMin, rangeMax, t0, t1, lockFront, lockBack, onScrub })
   scrubRef.current = { center, duration, rangeMin, rangeMax, t0, t1, lockFront, lockBack, onScrub }
 
   useEffect(() => {
-    dataRef.current = { t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin }
+    dataRef.current = {
+      t,
+      visible,
+      t0,
+      t1,
+      center,
+      lockFront,
+      lockBack,
+      yLabel,
+      formatTick,
+      sampleDots,
+      rangeMin,
+      showMarker,
+    }
     const canvas = canvasRef.current
     if (!canvas) return
     const paint = () => {
@@ -433,13 +468,14 @@ export function GraphPlot({
         yHoldRef.current,
         d.sampleDots,
         d.rangeMin,
+        d.showMarker,
       )
     }
     paint()
     const observer = new ResizeObserver(paint)
     observer.observe(canvas)
     return () => observer.disconnect()
-  }, [t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin])
+  }, [t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin, showMarker])
 
   useEffect(() => {
     const root = rootRef.current

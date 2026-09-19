@@ -27,6 +27,7 @@ type Props = {
   onScrub?: (next: Viewport) => void
   hidden: Record<string, boolean>
   onToggle: (id: string) => void
+  showMarker?: boolean
 }
 
 function linesFor(series: ThermalSeries, zones: ThermalZone[]): GraphLine[] {
@@ -100,6 +101,7 @@ export function ThermalGraph({
   onScrub,
   hidden,
   onToggle,
+  showMarker = false,
 }: Props) {
   return (
     <GraphPlot
@@ -120,6 +122,7 @@ export function ThermalGraph({
       sampleDots={!!series.raw}
       yLabel="°C"
       emptyHint="global min / max / center · drag a zone on the image"
+      showMarker={showMarker}
     />
   )
 }

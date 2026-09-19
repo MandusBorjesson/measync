@@ -162,10 +162,16 @@ code,
   color: #ff8a96;
 }
 
-.btn-lock.active {
+.btn-lock.active,
+.btn-play.active {
   background: #10322e;
   border-color: var(--teal);
   color: var(--teal);
+}
+
+.header-plot select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 @keyframes pulse {

@@ -15,7 +15,7 @@ The product is not a general video editor, a multi-room service, or a per-user s
 - **Tiled mosaic** — binary-split layout; split, swap, dock, and resize panes. Layout is shared with every connected viewer.
 - **Live sources** — cameras, Infiray thermal cameras (hybrid feed + graph), microphones, and Joulescopes today; other real-time and graph sources later.
 - **Live preview** — WebSocket fan-out of the latest **image** per camera/thermal source. Graph tiles query the selected time window over HTTP.
-- **Preview / Record / Stop / Reset** — adding a source fills a ~5 s `live_ring`. Record copies that preview into the capture ring (or resumes a frozen take), then appends until Stop. Stop fully stops ring appends. Reset clears RAM and returns to the 5 s preview (confirm if `dirty`).
+- **Preview / Record / Stop / Reset** — adding a source fills a ~5 s `live_ring`. Record copies that preview into the capture ring (or resumes a frozen take), then appends until Stop. Stop fully stops ring appends. Reset clears RAM and returns to the 5 s preview (confirm if `dirty`). After Stop, each viewer can **Play / Pause** a frozen take at a chosen speed (viewer-local playhead). Those controls are disabled during preview and recording.
 - **Time-aligned eviction** — when the byte cap is exceeded, the oldest horizon is dropped from every track together.
 - **Independent timeline** — lock front (newest samples) and lock back (oldest samples) default both on (full interval). Scroll to zoom, drag to pan/scrub. The same window is shared by the timeline and every graph tile.
 - **Captures** — save the ring to `data/captures/` or open a previous take back into RAM.
@@ -26,7 +26,7 @@ Unsaved RAM captures are discarded when you Reset (after confirm) or stop the ba
 
 ## Widget families
 
-Tiles are not camera/audio-specific. Every widget is built from two playback models. Most tiles use exactly one; **hybrid** tiles compose both in one pane. Do not invent a third scrub model. Lock front / lock back are **viewport policy** in [`viewport.ts`](../frontend/src/viewport.ts): they choose the window centre and duration, not a separate widget query type.
+Tiles are not camera/audio-specific. Every widget is built from two playback models. Most tiles use exactly one; **hybrid** tiles compose both in one pane. Do not invent a third scrub model. Lock front / lock back are **viewport policy** in [`viewport.ts`](../frontend/src/viewport.ts): they choose the window centre and duration, not a separate widget query type. Replay of a frozen take is the same selected timestamp, advanced locally by Play/Pause.
 
 ### Real-time
 
@@ -140,13 +140,14 @@ flowchart TB
 | [`backend/measync/persist.py`](../backend/measync/persist.py) | Capture save/load under `data/captures/`. |
 | [`backend/measync/profiles.py`](../backend/measync/profiles.py) | Profile CRUD; `safe_name()` sanitization. |
 | [`backend/measync/models.py`](../backend/measync/models.py) | Pydantic request/response schemas. |
-| [`frontend/src/App.tsx`](../frontend/src/App.tsx) | Session poll, presence socket, recording/reset, layout sync. |
+| [`frontend/src/App.tsx`](../frontend/src/App.tsx) | Session poll, presence socket, recording/reset, layout sync, viewer-local replay. |
+| [`frontend/src/audioReplay.ts`](../frontend/src/audioReplay.ts) | Web Audio playback of capture PCM, scheduled from the playhead. |
 | [`frontend/src/layout.ts`](../frontend/src/layout.ts) | Binary tree ops: split, remove, swap, dock, resize (ratio 0.15–0.85). |
-| [`frontend/src/viewport.ts`](../frontend/src/viewport.ts) | Shared viewer window math: lock front/back, wheel zoom, drag pan/seek. |
+| [`frontend/src/viewport.ts`](../frontend/src/viewport.ts) | Shared viewer window math: lock front/back, wheel zoom, drag pan/seek, replay playhead. |
 | [`frontend/src/graph.ts`](../frontend/src/graph.ts) | Shared graph helpers, viewer plot budget, live fetch interval (~200 ms), SI/scientific value format (`formatSi`). |
 | [`frontend/src/components/Mosaic.tsx`](../frontend/src/components/Mosaic.tsx) | Recursive tiles; drag-drop relocate; widget host. |
 | [`frontend/src/components/Timeline.tsx`](../frontend/src/components/Timeline.tsx) | Scrub, zoom, peer markers, follow-peer. Gestures share [`viewport.ts`](../frontend/src/viewport.ts) with graph tiles. |
-| [`frontend/src/widgets/GraphPlot.tsx`](../frontend/src/widgets/GraphPlot.tsx) | Shared 1..N line plot with collapse bands, time ticks, and playhead readouts; wheel-zoom / drag-pan updates the viewer window |
+| [`frontend/src/widgets/GraphPlot.tsx`](../frontend/src/widgets/GraphPlot.tsx) | Shared 1..N line plot with collapse bands, time ticks, and playhead readouts; wheel-zoom / drag-pan updates the viewer window. Replay keeps the window centered on the playhead. |
 
 ## Data flows
 
@@ -165,9 +166,9 @@ flowchart TB
 Timestamps are `time.monotonic_ns()` integers, shared across tracks. Joulescope samples are placed at the instrument output rate (last sample of a USB batch at the batch stamp). PCM and U/I/P chunks are **copied** out of the device callback buffers; those buffers are reused and must not alias ring history. If the USB circular buffer wraps before we read it (for example while applying `i_range` / output), unread sample ids are dropped so the surviving batch is not stamped onto older times. Callback jitter does not stretch or compress the time base.
 
 - Real-time widgets query a single timestamp (`t` = window centre) and display the nearest snapshot. While the buffer is growing and lock front is on, they stream `/ws/live` instead.
-- Graph widgets always query `[t0, t1]` for the visible window from the capture ring once a take exists, otherwise the live ring. **Lock front** pins the right edge to `t_max` (newest samples). **Lock back** pins the left edge to `t_min` (oldest samples). **Both** fit the full interval. **Neither** is free pan/seek. Wheel-zoom changes duration and keeps the remaining pin; zooming in from both-on keeps front and drops back. Drag-pan / timeline-seek turns both locks off and keeps the zoom duration; the centre is clamped so the window stays inside `[t_min, t_max]` instead of shrinking at the edges. Pan and zoom work while recording and while stopped.
+- Graph widgets always query `[t0, t1]` for the visible window from the capture ring once a take exists, otherwise the live ring. **Lock front** pins the right edge to `t_max` (newest samples). **Lock back** pins the left edge to `t_min` (oldest samples). **Both** fit the full interval. **Neither** is free pan/seek. Wheel-zoom changes duration and keeps the remaining pin; zooming in from both-on keeps front and drops back. Drag-pan / timeline-seek turns both locks off and keeps the zoom duration; the centre is clamped so the window stays inside `[t_min, t_max]` instead of shrinking at the edges. Pan and zoom work while recording and while stopped. After Stop, **Play** advances a viewer-local playhead through `[t_min, t_max]` at 0.25×–8×. Real-time tiles and graph windows follow that timestamp (a full-interval view shrinks to the default window so it can move). Audio tiles play captured PCM through the browser at least at 1× (other speeds use the same clock). Play/Pause and speed are disabled while previewing or recording.
 - Hybrid widgets do both in one tile (thermal: closest snapshot + windowed temperature series).
-- Audio PCM remains available over HTTP (`X-Sample-Rate` header) but the UI does not walk the take at 1×.
+- Audio PCM is available over HTTP (`X-Sample-Rate` header), trimmed to `[t0, t1]`. After Stop, audio tiles play that PCM in lockstep with the playhead.
 
 ### Presence and layout
 

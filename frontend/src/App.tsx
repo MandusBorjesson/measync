@@ -17,7 +17,17 @@ import { Timeline } from './components/Timeline'
 import { addLeaf, collectLeaves, removeLeaf, splitExisting } from './layout'
 import type { Kind, Layout, Peer, SessionStatus, SplitDir, TileSpec } from './types'
 import { GRAPH_POINT_CHOICES, loadPlotPoints, savePlotPoints } from './graph'
-import { applyLocks, DEFAULT_DURATION_NS, viewRange, type Viewport } from './viewport'
+import { unlockAudio } from './audioReplay'
+import {
+  advancePlayhead,
+  applyLocks,
+  DEFAULT_DURATION_NS,
+  MIN_DURATION_NS,
+  PLAY_RATES,
+  playhead,
+  viewRange,
+  type Viewport,
+} from './viewport'
 
 const DEFAULT_DURATION = DEFAULT_DURATION_NS
 const NAME_KEY = 'measync.displayName'
@@ -48,6 +58,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [capDraft, setCapDraft] = useState('1000')
   const [plotPoints, setPlotPoints] = useState(() => loadPlotPoints())
+  const [playing, setPlaying] = useState(false)
+  const [playRate, setPlayRate] = useState(1)
+  const [playheadNs, setPlayheadNs] = useState<number | null>(null)
   const seq = useRef(1)
   const liveStarted = useRef(new Set<string>())
   const presenceRef = useRef<WebSocket | null>(null)
@@ -273,6 +286,12 @@ export default function App() {
     setDuration(next.duration)
   }, [])
 
+  const onScrub = useCallback((next: Viewport) => {
+    setPlaying(false)
+    setPlayheadNs(next.center)
+    applyViewport(next)
+  }, [applyViewport])
+
   const ramRatio = session ? Math.min(1, session.bytes_used / Math.max(1, session.bytes_cap)) : 0
   const canSave = !!session && !session.recording && session.bytes_used > 0
   const range = viewRange(session)
@@ -286,8 +305,82 @@ export default function App() {
   }, [range.tMin, range.tMax, center, duration, lockFront, lockBack])
   const windowCenter = range.tMin == null ? center : fitted.center
   const windowDuration = range.tMin == null ? duration : fitted.duration
+  const canReplay = !!session && !session.recording && hasTake
+  const derivedPlayhead = playhead(lockFront, lockBack, windowCenter, range.tMin, range.tMax)
+  const effectivePlayhead = playheadNs ?? derivedPlayhead
+  const showMarker = playing || playheadNs != null
+  const playDurRef = useRef(duration)
+  const commitPlayhead = (t: number) => {
+    if (range.tMin == null || range.tMax == null) return
+    applyViewport(applyLocks(t, playDurRef.current, range.tMin, range.tMax, false, false))
+  }
+  const playRef = useRef({
+    playRate,
+    playheadNs,
+    tMin: range.tMin,
+    tMax: range.tMax,
+    commit: commitPlayhead,
+  })
+  playRef.current = { playRate, playheadNs, tMin: range.tMin, tMax: range.tMax, commit: commitPlayhead }
+  const followed =
+    playing && effectivePlayhead != null && range.tMin != null && range.tMax != null
+      ? applyLocks(effectivePlayhead, playDurRef.current, range.tMin, range.tMax, false, false)
+      : null
+  const viewCenter = followed?.center ?? windowCenter
+  const viewDuration = followed?.duration ?? windowDuration
+  const viewLockFront = followed ? false : lockFront
+  const viewLockBack = followed ? false : lockBack
+
+  useEffect(() => {
+    if (!canReplay) {
+      setPlaying(false)
+      setPlayheadNs(null)
+    }
+  }, [canReplay])
+
+  useEffect(() => {
+    if (!playing) return
+    let last = performance.now()
+    let raf = 0
+    const tick = (now: number) => {
+      const { playRate: rate, playheadNs: cur, tMin, tMax } = playRef.current
+      if (tMin == null || tMax == null) {
+        setPlaying(false)
+        return
+      }
+      const next = advancePlayhead(cur ?? tMin, now - last, rate, tMin, tMax)
+      last = now
+      setPlayheadNs(next.t)
+      if (next.done) {
+        setPlaying(false)
+        playRef.current.commit(next.t)
+        return
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [playing])
+
+  const togglePlay = () => {
+    if (playing) {
+      setPlaying(false)
+      if (effectivePlayhead != null) commitPlayhead(effectivePlayhead)
+      return
+    }
+    if (range.tMin == null || range.tMax == null) return
+    const span = Math.max(1, range.tMax - range.tMin)
+    const zoomed = duration < span - 1
+    playDurRef.current = Math.min(span, Math.max(MIN_DURATION_NS, zoomed ? duration : DEFAULT_DURATION_NS))
+    const start = effectivePlayhead ?? range.tMin
+    setPlayheadNs(start >= range.tMax - 1_000_000 ? range.tMin : start)
+    void unlockAudio()
+    setPlaying(true)
+  }
 
   const setLock = (front: boolean, back: boolean) => {
+    setPlaying(false)
+    setPlayheadNs(null)
     if (range.tMin != null && range.tMax != null) {
       applyViewport(applyLocks(fitted.center, fitted.duration, range.tMin, range.tMax, front, back))
       return
@@ -341,6 +434,8 @@ export default function App() {
               stopRecording().then(setSession).catch((err: Error) => setError(err.message))
               return
             }
+            setPlaying(false)
+            setPlayheadNs(null)
             startRecording()
               .then((next) => {
                 setSession(next)
@@ -355,6 +450,8 @@ export default function App() {
           className="btn"
           onClick={() => {
             if (!confirmWipe()) return
+            setPlaying(false)
+            setPlayheadNs(null)
             resetSession()
               .then((next) => {
                 setSession(next)
@@ -377,6 +474,31 @@ export default function App() {
         >
           Lock front
         </button>
+        <div className="header-cluster">
+          <button
+            className={`btn btn-play${playing ? ' active' : ''}`}
+            disabled={!canReplay}
+            title={canReplay ? (playing ? 'Pause replay' : 'Replay capture') : 'Stop recording to replay'}
+            onClick={togglePlay}
+          >
+            {playing ? 'Pause' : 'Play'}
+          </button>
+          <label className="header-plot" title={canReplay ? 'Playback speed' : 'Stop recording to replay'}>
+            <span>speed</span>
+            <select
+              value={playRate}
+              disabled={!canReplay}
+              aria-label="Playback speed"
+              onChange={(event) => setPlayRate(Number(event.target.value))}
+            >
+              {PLAY_RATES.map((rate) => (
+                <option key={rate} value={rate}>
+                  {rate}×
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <button className="btn" disabled={!canSave && !(session && !session.recording)} onClick={() => setModal('captures')}>
           Captures
         </button>
@@ -425,15 +547,19 @@ export default function App() {
             tiles={tiles}
             focusedId={focusedId}
             live={growing}
-            lockFront={lockFront}
-            lockBack={lockBack}
+            lockFront={viewLockFront}
+            lockBack={viewLockBack}
             hasCapture={session?.t_min != null}
             recording={!!session?.recording}
-            center={windowCenter}
+            center={effectivePlayhead}
+            windowCenter={viewCenter}
             origin={range.tMin}
             tMax={range.tMax}
-            duration={windowDuration}
-            onScrub={applyViewport}
+            duration={viewDuration}
+            showMarker={showMarker}
+            playing={playing}
+            playRate={playRate}
+            onScrub={onScrub}
             onFocus={setFocusedId}
             onSplit={(id, dir) => {
               setFocusedId(id)
@@ -466,13 +592,14 @@ export default function App() {
 
       <Timeline
         session={session}
-        lockFront={lockFront}
-        lockBack={lockBack}
-        center={windowCenter}
-        duration={windowDuration}
+        lockFront={viewLockFront}
+        lockBack={viewLockBack}
+        center={viewCenter}
+        duration={viewDuration}
+        marker={showMarker ? effectivePlayhead : null}
         peers={peers}
         selfId={selfId}
-        onScrub={applyViewport}
+        onScrub={onScrub}
         onJumpToPeer={(peer) => {
           const front = peer.lock_front !== false
           const back = peer.lock_back !== false
@@ -517,6 +644,8 @@ export default function App() {
         <CaptureMenu
           canSave={canSave}
           onOpened={(next) => {
+            setPlaying(false)
+            setPlayheadNs(null)
             setSession(next)
             fitBothLocks()
           }}

@@ -12,6 +12,7 @@ type Props = {
   selfId: string | null
   onScrub: (next: Viewport) => void
   onJumpToPeer: (peer: Peer) => void
+  marker?: number | null
 }
 
 export function Timeline({
@@ -24,6 +25,7 @@ export function Timeline({
   selfId,
   onScrub,
   onJumpToPeer,
+  marker = null,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
@@ -129,8 +131,13 @@ export function Timeline({
             }}
           />
         )}
-        {hasRange && tMin != null && windowCenter != null && !bothLocks && (
-          <div className="playhead" style={{ left: `${xOf(windowCenter)}%` }} />
+        {hasRange && tMin != null && tMax != null && (marker ?? (!bothLocks ? windowCenter : null)) != null && (
+          <div
+            className="playhead"
+            style={{
+              left: `${xOf(clamp((marker ?? windowCenter) as number, tMin, tMax))}%`,
+            }}
+          />
         )}
         {hasRange &&
           tMin != null &&

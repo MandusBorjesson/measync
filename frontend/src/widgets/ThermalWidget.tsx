@@ -54,6 +54,7 @@ type Props = {
   showGraph?: boolean
   onShowGraphChange?: (show: boolean) => void
   plotPoints?: number
+  showMarker?: boolean
 }
 
 type Draft = { x: number; y: number; w: number; h: number }
@@ -95,6 +96,7 @@ export function ThermalWidget({
   showGraph = true,
   onShowGraphChange,
   plotPoints,
+  showMarker = false,
 }: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -241,7 +243,7 @@ export function ThermalWidget({
           await new Promise((resolve) => window.setTimeout(resolve, zoned ? 50 : 16))
           continue
         }
-        if (isLive && now - lastFetch < LIVE_FETCH_MS) {
+        if (now - lastFetch < LIVE_FETCH_MS) {
           await new Promise((resolve) => window.setTimeout(resolve, LIVE_FETCH_MS - (now - lastFetch)))
           continue
         }
@@ -584,6 +586,7 @@ export function ThermalWidget({
               onScrub={onScrub}
               hidden={hidden}
               onToggle={toggleLine}
+              showMarker={showMarker}
             />
           </div>
         </>
