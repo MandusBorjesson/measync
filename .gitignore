@@ -9,3 +9,4 @@ frontend/dist/
 .python-version
 *.log
 .DS_Store
+venv
