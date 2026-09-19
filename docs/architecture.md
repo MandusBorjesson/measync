@@ -34,7 +34,7 @@ Discrete snapshots along the timeline. Examples: cameras today; text logs later.
 
 | Mode | Behavior |
 |------|----------|
-| Live (no capture under the playhead) | Stream the latest snapshot (`/ws/live/{source_id}`). |
+| Live | Stream the latest snapshot (`/ws/live/{source_id}`). Unplug clears the tile (black + `OFFLINE`); replug resumes. |
 | Scrub / playback | Show the **closest snapshot** to the selected timestamp (timeline window centre). |
 
 Current implementation: [`frontend/src/widgets/CameraWidget.tsx`](../frontend/src/widgets/CameraWidget.tsx) with `GET /api/session/camera/{id}/frame?t=`.
@@ -45,7 +45,7 @@ Continuous series over a window. Examples: audio envelope today; current/voltage
 
 | Mode | Behavior |
 |------|----------|
-| Live (no capture under the playhead) | Stream a rolling preview (`/ws/live/{source_id}`). |
+| Live (no capture under the playhead) | Stream a rolling preview (`/ws/live/{source_id}`). Unplug clears the trace; replug resumes. |
 | Scrub / playback | Render the **currently selected window**, centered on the selected timestamp (`t0`–`t1`). |
 
 Current implementation: [`frontend/src/widgets/AudioWidget.tsx`](../frontend/src/widgets/AudioWidget.tsx) with `GET /api/session/audio/{id}/waveform?t0=&t1=` (display) and PCM for playback.
@@ -56,14 +56,14 @@ One tile, two queries: a real-time snapshot on top and a graph of the selected w
 
 | Pane | Behavior |
 |------|----------|
-| Upper (image) | Same as real-time: live `/ws/live` or closest snapshot `GET /api/session/thermal/{id}/frame?t=`. |
+| Upper (image) | Same as real-time: live `/ws/live` (including while a capture exists) or closest snapshot `GET /api/session/thermal/{id}/frame?t=`. |
 | Lower (graph) | Same as graph: rolling live preview, or `GET /api/session/thermal/{id}/series?t0=&t1=` for the selected window. Optional `zones=x,y,w,h;…` (sensor pixels) adds per-zone min/max series. |
 
 Users drag rectangles on the feed to mark zones. Each zone shows local min/max on the image; the graph plots those traces next to global min / max / center, with legend labels. Zone geometry lives on the tile spec (presence/layout), not in the ring.
 
 Current implementation: [`frontend/src/widgets/ThermalWidget.tsx`](../frontend/src/widgets/ThermalWidget.tsx). Live `/ws/live` payload is a `THRM` snapshot: header, colormap JPEG, and a zlib temperature map used for zone stats.
 
-Widgets switch to HTTP ring queries whenever the viewer is scrubbing, playing, or has capture data under the playhead (`followStream = live && !playing && !hasCapture`).
+Live **image** preview uses `/ws/live` whenever the viewer is in live mode (`previewLive = live && !playing`), even if a capture exists under the playhead — otherwise the last ring JPEG would freeze on unplug. Graph widgets still switch to HTTP ring queries when scrubbing, playing, or a capture is under the playhead (`followStream = live && !playing && !hasCapture`).
 
 ## Runtime topology
 
@@ -122,9 +122,9 @@ flowchart TB
 |-------|------|
 | [`backend/measync/main.py`](../backend/measync/main.py) | FastAPI app, CORS, all HTTP and WebSocket routes. No capture or ring logic. |
 | [`backend/measync/session.py`](../backend/measync/session.py) | Orchestrator: recording flag, `dirty`, source handles, data dirs. |
-| [`backend/measync/capture.py`](../backend/measync/capture.py) | Per-source daemon thread. Always publishes live; appends to the ring only while `recording`. |
+| [`backend/measync/capture.py`](../backend/measync/capture.py) | Per-source daemon thread. Publishes live while the device is open; on drop, publishes `{type: "offline"}`, releases, and retries until the device returns. Appends to the ring only while `recording`. |
 | [`backend/measync/ring.py`](../backend/measync/ring.py) | `CamTrack` / `AudioTrack` / `RingBuffer`. Thread-locked; global time-aligned eviction. `CamTrack` holds camera JPEGs and thermal `THRM` snapshots (`kind` on the track) and can emit a thermal temperature series. |
-| [`backend/measync/livehub.py`](../backend/measync/livehub.py) | Thread → asyncio fan-out. Per-source queues (`maxsize` 2); drop oldest on overflow. |
+| [`backend/measync/livehub.py`](../backend/measync/livehub.py) | Thread → asyncio fan-out. Per-source queues (`maxsize` 2); drop oldest on overflow. `{type: "offline"}` is fanned out and is **not** kept as `latest`. |
 | [`backend/measync/presence.py`](../backend/measync/presence.py) | Peers, viewport broadcast, shared layout (last writer wins). |
 | [`backend/measync/devices.py`](../backend/measync/devices.py) | Enumerate cameras, Infiray thermals, and mics. |
 | [`backend/measync/thermal.py`](../backend/measync/thermal.py) | Infiray P2 Pro decode, colormap JPEG, snapshot packing, zone extrema, series points. |
@@ -141,8 +141,8 @@ flowchart TB
 
 ### Live and record
 
-1. Add a source → capture thread starts.
-2. Every sample is published to `LiveHub` (live tiles).
+1. Add a source → capture thread starts and stays up across unplug/replug.
+2. Every sample is published to `LiveHub` (live tiles). Disconnect publishes `{type: "offline"}` (not kept as latest) and the thread retries open.
 3. **Record** clears the ring, sets `recording=true`, then appends samples and marks `dirty`.
 4. **Stop** leaves the ring in RAM (`recording=false`).
 5. **Record** again clears unsaved RAM.
@@ -183,7 +183,7 @@ Agents must not break these. If a feature needs to, change this document in the 
 5. **No save/open while recording**.
 6. **Source IDs today** are `camera:<index>`, `thermal:<index>`, or `audio:<index>`. New kinds should stay `{kind}:{index}` and be validated at the API boundary.
 7. **Widget family** — every widget is real-time (closest snapshot), graph (selected window), or hybrid (both in one tile). No third scrub model.
-8. **Live always streams; ring only while recording** — capture threads publish regardless of `recording`.
+8. **Live always streams while the device is present; ring only while recording** — capture threads publish regardless of `recording`. On disconnect they publish `{type: "offline"}` (not stored as latest) and retry open until the device returns.
 9. **`main.py` is I/O only** — routes call `Session` / ring / persist / presence. Capture and eviction stay out of the router.
 10. **Capture on daemon threads; asyncio for WebSockets** — `LiveHub.publish` uses `call_soon_threadsafe`. Do not block the event loop on device I/O.
 11. **Shared layout last-write-wins** — stored on `PresenceHub`; no CRDT.
@@ -197,7 +197,7 @@ Agents must not break these. If a feature needs to, change this document in the 
 |--------|------|---------|
 | GET | `/api/health` | `{ ok: true }` |
 | GET | `/api/devices` | Cameras, Infiray thermals, and mics (busy video devices still listed) |
-| GET | `/api/session` | Recording, `t_min`/`t_max`, RAM used/cap, `dirty`, sources |
+| GET | `/api/session` | Recording, `t_min`/`t_max`, RAM used/cap, `dirty`, sources (`online` is whether the capture thread currently has the device) |
 | PUT | `/api/session/cap` | Set `bytes_cap` (1 MB–64 GB) |
 | POST | `/api/session/start` | Clear ring, start recording |
 | POST | `/api/session/stop` | Stop recording; keep ring |
@@ -222,8 +222,9 @@ One connection per live tile.
 - Real-time camera today: **binary** JPEG frames.
 - Hybrid thermal today: **binary** `THRM` snapshot. Current header is min/max/center °C, hottest/coldest pixel `x,y`, `jpeg_len`, `temp_len`, then the colormap JPEG, a zlib little-endian int16 map (`°C × 100`, 192×256), and a 32×24 uncompressed min/max grid for cheap zone series. Older captures may omit the temperature map and/or coarse grid.
 - Graph audio today: **JSON** `{ t_ns, min, max, sample_rate }` per ~40 ms block.
+- Any kind, device gone: **JSON** `{ "type": "offline" }`. Live tiles clear; this message is not cached as the latest sample.
 
-New live payloads should stay self-describing per source kind. Queues keep only the latest few samples (backpressure by dropping oldest).
+New live payloads should stay self-describing per source kind. Queues keep only the latest few samples (backpressure by dropping oldest). `SourceInfo.online` on `GET /api/session` mirrors whether the capture thread currently has the device.
 
 ### `/ws/presence`
 
@@ -263,7 +264,7 @@ Do not:
 - Put device I/O or ring mutation in `main.py`.
 - Assume auth, multi-tenant isolation, or durable RAM across backend restart.
 
-Tests today: `python -m measync.selftest` (ring eviction alignment, frame/waveform, thermal decode, persist round-trip). There is no pytest suite; extend `selftest.py` or add tests when changing ring/persist behavior.
+Tests today: `python -m measync.selftest` (ring eviction alignment, frame/waveform, thermal decode, persist round-trip, live hub offline). There is no pytest suite; extend `selftest.py` or add tests when changing ring/persist/live-hub behavior.
 
 ## Module map
 

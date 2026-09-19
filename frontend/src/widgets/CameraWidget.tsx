@@ -1,11 +1,10 @@
-import { useEffect, useRef } from 'react'
-import { fetchFrame, wsUrl } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { fetchFrame, isLiveOffline, wsUrl } from '../api'
 
 type Props = {
   sourceId: string
   live: boolean
   playing?: boolean
-  hasCapture?: boolean
   recording?: boolean
   center: number | null
   origin: number | null
@@ -15,7 +14,6 @@ export function CameraWidget({
   sourceId,
   live,
   playing = false,
-  hasCapture = false,
   recording = false,
   center,
   origin,
@@ -25,10 +23,19 @@ export function CameraWidget({
   const centerRef = useRef(center)
   const liveRef = useRef(live)
   const recordingRef = useRef(recording)
+  const [offline, setOffline] = useState(false)
   centerRef.current = center
   liveRef.current = live
   recordingRef.current = recording
-  const followStream = live && !playing && !hasCapture
+  const previewLive = live && !playing
+
+  const clearFrame = () => {
+    if (imgRef.current) imgRef.current.removeAttribute('src')
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current)
+      urlRef.current = null
+    }
+  }
 
   const showBlob = (buffer: ArrayBuffer) => {
     const next = URL.createObjectURL(new Blob([buffer], { type: 'image/jpeg' }))
@@ -38,19 +45,29 @@ export function CameraWidget({
   }
 
   useEffect(() => {
-    if (!followStream) return
+    if (!previewLive) return
     const ws = new WebSocket(wsUrl(`/ws/live/${encodeURIComponent(sourceId)}`))
     ws.binaryType = 'arraybuffer'
     ws.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) showBlob(event.data)
+      if (typeof event.data === 'string') {
+        if (isLiveOffline(event.data)) {
+          setOffline(true)
+          clearFrame()
+        }
+        return
+      }
+      if (event.data instanceof ArrayBuffer) {
+        setOffline(false)
+        showBlob(event.data)
+      }
     }
     return () => {
       ws.close()
     }
-  }, [sourceId, followStream])
+  }, [sourceId, previewLive])
 
   useEffect(() => {
-    if (followStream) return
+    if (previewLive) return
     let stopped = false
     let lastDrawn = Number.NaN
 
@@ -77,7 +94,7 @@ export function CameraWidget({
     return () => {
       stopped = true
     }
-  }, [sourceId, followStream])
+  }, [sourceId, previewLive])
 
   useEffect(() => {
     return () => {
@@ -85,18 +102,20 @@ export function CameraWidget({
     }
   }, [])
 
-  const stamp = live
-    ? 'LIVE'
-    : playing
-      ? `PLAY ${center != null ? ((center - (origin ?? center)) / 1e9).toFixed(3) : ''}s`
-      : center != null
-        ? `${((center - (origin ?? center)) / 1e9).toFixed(3)}s`
-        : ''
+  const stamp = previewLive && offline
+    ? 'OFFLINE'
+    : live
+      ? 'LIVE'
+      : playing
+        ? `PLAY ${center != null ? ((center - (origin ?? center)) / 1e9).toFixed(3) : ''}s`
+        : center != null
+          ? `${((center - (origin ?? center)) / 1e9).toFixed(3)}s`
+          : ''
 
   return (
     <div className="tile-body">
       <img ref={imgRef} className="camera-frame" alt="" />
-      {stamp && <div className="stamp">{stamp}</div>}
+      {stamp && <div className={`stamp${offline ? ' offline' : ''}`}>{stamp}</div>}
     </div>
   )
 }

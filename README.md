@@ -42,7 +42,7 @@ Open http://127.0.0.1:5173 and enter a display name.
 
 ## Use
 
-1. **Add source** — pick a camera, Infiray thermal, or mic. The first tile fills the workspace; later sources split the focused pane (or use a tile’s split buttons). Drag a tile header onto another tile to swap, or onto an edge to dock. Layout is shared with every connected viewer.
+1. **Add source** — pick a camera, Infiray thermal, or mic. The first tile fills the workspace; later sources split the focused pane (or use a tile’s split buttons). Drag a tile header onto another tile to swap, or onto an edge to dock. Layout is shared with every connected viewer. Unplug a device and the live tile goes black (`OFFLINE`); plug it back in and capture resumes.
 2. **Record / Stop** — capture into a capped RAM ring. Oldest samples drop (time-aligned across sources) when the cap is reached. Click the RAM meter to change the cap.
 3. **Timeline** — live by default. Click to scrub, scroll to zoom the window. Real-time tiles (camera) show the closest snapshot at the window centre; graph tiles (audio) show the selected window centered on that timestamp; hybrid tiles (thermal) do both, and you can drag zones on the feed for local min/max traces.
 4. **Captures** — after Stop, save the ring to `data/captures/` or open a previous take back into RAM.

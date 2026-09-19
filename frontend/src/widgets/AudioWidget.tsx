@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { fetchWaveform, wsUrl } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { fetchWaveform, isLiveOffline, wsUrl } from '../api'
 
 type Peak = { t: number; min: number; max: number }
 
@@ -52,6 +52,7 @@ export function AudioWidget({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const peaksRef = useRef<Peak[]>([])
   const rangeRef = useRef({ t0, t1 })
+  const [offline, setOffline] = useState(false)
   rangeRef.current = { t0, t1 }
   const followStream = live && !playing && !hasCapture
 
@@ -75,9 +76,19 @@ export function AudioWidget({
   useEffect(() => {
     if (!followStream) return
     peaksRef.current = []
+    if (canvasRef.current) draw(canvasRef.current, [])
     const ws = new WebSocket(wsUrl(`/ws/live/${encodeURIComponent(sourceId)}`))
     ws.onmessage = (event) => {
+      if (typeof event.data !== 'string') return
+      if (isLiveOffline(event.data)) {
+        setOffline(true)
+        peaksRef.current = []
+        if (canvasRef.current) draw(canvasRef.current, [])
+        return
+      }
       const msg = JSON.parse(event.data) as { t_ns: number; min: number; max: number }
+      if (msg.t_ns == null) return
+      setOffline(false)
       const next = [...peaksRef.current, { t: msg.t_ns, min: msg.min, max: msg.max }]
       peaksRef.current = next.slice(-240)
       if (canvasRef.current) draw(canvasRef.current, peaksRef.current)
@@ -131,8 +142,13 @@ export function AudioWidget({
     <div className="tile-body">
       <canvas ref={canvasRef} className="audio-canvas" />
       <div className="now-bar" style={{ left: `${percent}%` }} />
-      {live && <div className="stamp">LIVE</div>}
-      {playing && !live && <div className="stamp">PLAY</div>}
+      {followStream && offline ? (
+        <div className="stamp offline">OFFLINE</div>
+      ) : live ? (
+        <div className="stamp">LIVE</div>
+      ) : playing ? (
+        <div className="stamp">PLAY</div>
+      ) : null}
     </div>
   )
 }

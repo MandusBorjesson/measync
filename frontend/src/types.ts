@@ -14,6 +14,7 @@ export type SourceInfo = {
   label: string
   sample_rate: number | null
   live: boolean
+  online?: boolean
 }
 
 export type SessionStatus = {

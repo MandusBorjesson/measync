@@ -20,6 +20,7 @@ class SourceInfo(BaseModel):
     label: str
     sample_rate: int | None = None
     live: bool = True
+    online: bool = True
 
 
 class SessionStatus(BaseModel):

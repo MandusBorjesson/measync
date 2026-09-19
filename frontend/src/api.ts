@@ -154,3 +154,12 @@ export function wsUrl(path: string): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   return `${proto}://${location.host}${path}`
 }
+
+export function isLiveOffline(data: unknown): boolean {
+  if (typeof data !== 'string') return false
+  try {
+    return (JSON.parse(data) as { type?: string }).type === 'offline'
+  } catch {
+    return false
+  }
+}

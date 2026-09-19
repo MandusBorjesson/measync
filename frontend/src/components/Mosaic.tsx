@@ -167,7 +167,6 @@ function Node(
             sourceId={tile.sourceId}
             live={props.live}
             playing={props.playing}
-            hasCapture={props.hasCapture}
             recording={props.recording}
             center={props.center}
             origin={props.origin}

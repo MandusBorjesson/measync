@@ -109,6 +109,21 @@ def test_thermal_decode_and_persist(tmp_path: Path):
     assert loaded_series is not None and abs(loaded_series["zones"][0]["max"][0] - 40.0) < 0.05
 
 
+def test_livehub_offline_drops_latest():
+    from measync.livehub import LiveHub
+
+    hub = LiveHub()
+    hub.publish("camera:0", b"jpeg")
+    assert hub.latest["camera:0"] == b"jpeg"
+    hub.publish_offline("camera:0")
+    assert "camera:0" not in hub.latest
+    hub.publish("audio:0", {"t_ns": 1, "min": 0.0, "max": 0.1})
+    hub.publish("audio:0", {"type": "offline"})
+    assert "audio:0" not in hub.latest
+    queued = hub.subscribe("audio:0")
+    assert queued.get_nowait() == {"type": "offline"}
+
+
 if __name__ == "__main__":
     import shutil
 
@@ -120,4 +135,5 @@ if __name__ == "__main__":
     thermal_dest = dest / "thermal"
     thermal_dest.mkdir()
     test_thermal_decode_and_persist(thermal_dest)
+    test_livehub_offline_drops_latest()
     print("ok")

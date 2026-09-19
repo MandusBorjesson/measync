@@ -22,7 +22,7 @@ Live preview still uses `/ws/live/{source_id}`. Scrub/playback uses HTTP ring qu
 
 - [`backend/measync/main.py`](backend/measync/main.py) — HTTP/WebSocket routes only.
 - [`backend/measync/session.py`](backend/measync/session.py) — orchestrates recording, sources, `dirty`.
-- [`backend/measync/capture.py`](backend/measync/capture.py) — daemon threads; always live-publish; append to the ring only while recording.
+- [`backend/measync/capture.py`](backend/measync/capture.py) — daemon threads; live-publish while the device is open; retry after disconnect; append to the ring only while recording.
 - [`backend/measync/ring.py`](backend/measync/ring.py) — time-aligned global eviction; monotonic nanoseconds.
 - [`frontend/src/layout.ts`](frontend/src/layout.ts) — mosaic tree math; do not fork a second layout model.
 - [`backend/measync/models.py`](backend/measync/models.py) and [`frontend/src/types.ts`](frontend/src/types.ts) stay aligned.

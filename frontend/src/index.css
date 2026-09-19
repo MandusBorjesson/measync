@@ -479,6 +479,10 @@ code,
   padding: 2px 6px;
 }
 
+.stamp.offline {
+  color: #ff6b7a;
+}
+
 .thermal-body {
   display: flex;
   flex-direction: column;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { fetchThermalFrame, fetchThermalSeries, wsUrl } from '../api'
+import { fetchThermalFrame, fetchThermalSeries, isLiveOffline, wsUrl } from '../api'
 import {
   clampZone,
   clientToSensor,
@@ -118,6 +118,7 @@ export function ThermalWidget({
   const zonesRef = useRef(zones)
   const followStreamRef = useRef(false)
   const genRef = useRef(0)
+  const [offline, setOffline] = useState(false)
   const [stats, setStats] = useState<ThermalStats>(EMPTY_STATS)
   const [tempMap, setTempMap] = useState<Float32Array | null>(null)
   const [box, setBox] = useState<FrameBox | null>(null)
@@ -133,7 +134,8 @@ export function ThermalWidget({
   recordingRef.current = recording
   rangeRef.current = { t0, t1 }
   zonesRef.current = zones
-  const followStream = live && !playing && !hasCapture
+  const previewLive = live && !playing
+  const followStream = previewLive && !hasCapture
   followStreamRef.current = followStream
   const zoneGeomKey = encodeZoneQuery(zones)
 
@@ -142,6 +144,19 @@ export function ThermalWidget({
     if (!img) return
     setBox(measureFrame(img))
   }, [])
+
+  const clearLivePreview = () => {
+    genRef.current += 1
+    if (imgRef.current) imgRef.current.removeAttribute('src')
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current)
+      urlRef.current = null
+    }
+    setStats(EMPTY_STATS)
+    setTempMap(null)
+    setBox(null)
+    if (followStreamRef.current) setSeries(EMPTY_SERIES)
+  }
 
   const showPayload = (buffer: ArrayBuffer, tNs?: number) => {
     const my = ++genRef.current
@@ -177,23 +192,33 @@ export function ThermalWidget({
   }, [relayout])
 
   useEffect(() => {
-    if (!followStream) return
+    if (!previewLive) return
     const ws = new WebSocket(wsUrl(`/ws/live/${encodeURIComponent(sourceId)}`))
     ws.binaryType = 'arraybuffer'
     ws.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) void showPayload(event.data)
+      if (typeof event.data === 'string') {
+        if (isLiveOffline(event.data)) {
+          setOffline(true)
+          clearLivePreview()
+        }
+        return
+      }
+      if (event.data instanceof ArrayBuffer) {
+        setOffline(false)
+        void showPayload(event.data)
+      }
     }
     return () => {
       ws.close()
     }
-  }, [sourceId, followStream])
+  }, [sourceId, previewLive])
 
   useEffect(() => {
     if (followStream) setSeries(EMPTY_SERIES)
   }, [followStream, sourceId, zoneGeomKey])
 
   useEffect(() => {
-    if (followStream) return
+    if (previewLive) return
     let stopped = false
     let lastDrawn = Number.NaN
 
@@ -220,7 +245,7 @@ export function ThermalWidget({
     return () => {
       stopped = true
     }
-  }, [sourceId, followStream])
+  }, [sourceId, previewLive])
 
   useEffect(() => {
     if (followStream || !showGraph) return
@@ -401,13 +426,15 @@ export function ThermalWidget({
     move(event.nativeEvent)
   }
 
-  const stamp = live
-    ? 'LIVE'
-    : playing
-      ? `PLAY ${center != null ? ((center - (origin ?? center)) / 1e9).toFixed(3) : ''}s`
-      : center != null
-        ? `${((center - (origin ?? center)) / 1e9).toFixed(3)}s`
-        : ''
+  const stamp = previewLive && offline
+    ? 'OFFLINE'
+    : live
+      ? 'LIVE'
+      : playing
+        ? `PLAY ${center != null ? ((center - (origin ?? center)) / 1e9).toFixed(3) : ''}s`
+        : center != null
+          ? `${((center - (origin ?? center)) / 1e9).toFixed(3)}s`
+          : ''
 
   const overlayZones: Array<ThermalZone & { draft?: boolean }> = draft
     ? [...zones, { id: 'draft', name: 'new', x: draft.x, y: draft.y, w: draft.w, h: draft.h, draft: true }]
@@ -535,7 +562,7 @@ export function ThermalWidget({
                 </div>
               )
             })}
-          {stamp && <div className="stamp">{stamp}</div>}
+          {stamp && <div className={`stamp${offline ? ' offline' : ''}`}>{stamp}</div>}
         </div>
         <div className="thermal-scale" title="Autoscale, cold to hot" aria-hidden />
         <div className="thermal-hud">

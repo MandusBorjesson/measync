@@ -35,6 +35,7 @@ class Session:
                 label=handle.label,
                 sample_rate=handle.sample_rate,
                 live=True,
+                online=handle.online,
             )
         for meta in self.ring.track_meta():
             if meta["id"] in by_id:
@@ -45,6 +46,7 @@ class Session:
                 label=meta["label"],
                 sample_rate=meta.get("sample_rate"),
                 live=False,
+                online=False,
             )
         return list(by_id.values())
 
