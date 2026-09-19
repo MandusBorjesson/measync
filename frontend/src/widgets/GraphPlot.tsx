@@ -1,9 +1,66 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react'
-import { hasBand, type GraphLine } from '../graph'
+import { formatSi, hasBand, type GraphLine } from '../graph'
 import { applyPanDelta, applyWheelZoom, type Viewport } from '../viewport'
 
-const PAD_L = 52
+const PAD_L = 58
 const PAD_R = 8
+const TIME_STEPS_NS = [
+  1e6, 2e6, 5e6, 1e7, 2e7, 5e7, 1e8, 2e8, 5e8, 1e9, 2e9, 5e9, 10e9, 15e9, 30e9, 60e9,
+]
+
+function formatTimeOffset(t: number, origin: number, stepNs: number) {
+  const s = (t - origin) / 1e9
+  if (stepNs < 1e9) return `${s.toFixed(3)}s`
+  if (stepNs < 10e9) return `${s.toFixed(2)}s`
+  return `${s.toFixed(1)}s`
+}
+
+function timeTicks(view0: number, view1: number, origin: number, maxTicks: number) {
+  const span = Math.max(1, view1 - view0)
+  let step = TIME_STEPS_NS[TIME_STEPS_NS.length - 1]
+  for (const candidate of TIME_STEPS_NS) {
+    if (span / candidate <= maxTicks) {
+      step = candidate
+      break
+    }
+  }
+  const start = origin + Math.ceil((view0 - origin) / step) * step
+  const ticks: number[] = []
+  for (let t = start; t <= view1 + 1; t += step) {
+    if (t >= view0 - 1) ticks.push(t)
+    if (ticks.length > maxTicks + 2) break
+  }
+  return { ticks, step }
+}
+
+function sampleAt(times: number[], values: (number | null)[], at: number) {
+  const n = Math.min(times.length, values.length)
+  if (n <= 0) return null
+  if (at <= times[0]) {
+    const v = values[0]
+    return v == null || !Number.isFinite(v) ? null : v
+  }
+  if (at >= times[n - 1]) {
+    const v = values[n - 1]
+    return v == null || !Number.isFinite(v) ? null : v
+  }
+  let lo = 0
+  let hi = n - 1
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (times[mid] <= at) lo = mid
+    else hi = mid
+  }
+  const a = values[lo]
+  const b = values[hi]
+  const aOk = a != null && Number.isFinite(a)
+  const bOk = b != null && Number.isFinite(b)
+  if (!aOk) return bOk ? b : null
+  if (!bOk) return a
+  const dt = times[hi] - times[lo]
+  if (dt <= 0) return a
+  return a + ((b - a) * (at - times[lo])) / dt
+}
 
 type Props = {
   t: number[]
@@ -86,6 +143,7 @@ function draw(
   formatTick?: (value: number) => string,
   yHold?: { octave: number; bounds: [number, number] | null },
   sampleDots?: boolean,
+  rangeMin?: number | null,
 ) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
@@ -107,37 +165,55 @@ function draw(
   const padL = PAD_L * dpr
   const padR = PAD_R * dpr
   const padT = 10 * dpr
-  const padB = 8 * dpr
+  const padB = 22 * dpr
   const plotW = Math.max(1, width - padL - padR)
   const plotH = Math.max(1, height - padT - padB)
   const view0 = t0 ?? t[0] ?? 0
   const view1 = t1 ?? t[t.length - 1] ?? 1
   const span = Math.max(1, view1 - view0)
+  const origin = rangeMin ?? view0
   const xOf = (ns: number) => padL + ((ns - view0) / span) * plotW
+  const axisY = padT + plotH
+  const maxTimeTicks = Math.max(3, Math.min(8, Math.floor(plotW / (72 * dpr))))
+  const { ticks: xTicks, step: xStep } = timeTicks(view0, view1, origin, maxTimeTicks)
 
   ctx.strokeStyle = '#1d2838'
   ctx.lineWidth = dpr
   ctx.beginPath()
   ctx.moveTo(padL, padT)
-  ctx.lineTo(padL, padT + plotH)
-  ctx.lineTo(padL + plotW, padT + plotH)
+  ctx.lineTo(padL, axisY)
+  ctx.lineTo(padL + plotW, axisY)
   ctx.stroke()
+
+  ctx.font = `${Math.round(11 * dpr)}px "IBM Plex Mono", monospace`
+  ctx.textBaseline = 'top'
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#8b9bb0'
+  for (const ns of xTicks) {
+    const x = xOf(ns)
+    if (x < padL - 1 || x > padL + plotW + 1) continue
+    ctx.strokeStyle = '#16202c'
+    ctx.beginPath()
+    ctx.moveTo(x, padT)
+    ctx.lineTo(x, axisY)
+    ctx.stroke()
+    ctx.strokeStyle = '#1d2838'
+    ctx.beginPath()
+    ctx.moveTo(x, axisY)
+    ctx.lineTo(x, axisY + 4 * dpr)
+    ctx.stroke()
+    const label = formatTimeOffset(ns, origin, xStep)
+    const tw = ctx.measureText(label).width
+    if (x - tw / 2 < 2 * dpr || x + tw / 2 > width - 2 * dpr) continue
+    ctx.fillText(label, x, axisY + 6 * dpr)
+  }
 
   if (bounds) {
     const [lo, hi] = bounds
     const ticks = 4
-    ctx.font = `${Math.round(11 * dpr)}px "IBM Plex Mono", monospace`
-    ctx.fillStyle = '#8b9bb0'
     ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
-    const fmt = formatTick ?? ((value: number) => {
-      const abs = Math.abs(value)
-      if (abs >= 100) return value.toFixed(0)
-      if (abs >= 10) return value.toFixed(1)
-      if (abs >= 1) return value.toFixed(2)
-      if (abs >= 0.01) return value.toFixed(3)
-      return value.toExponential(1)
-    })
+    const fmt = formatTick ?? ((value: number) => formatSi(value, yLabel ?? ''))
     for (let i = 0; i <= ticks; i++) {
       const frac = i / ticks
       const y = padT + plotH * (1 - frac)
@@ -251,8 +327,52 @@ function draw(
     ctx.lineWidth = Math.max(2, dpr)
     ctx.beginPath()
     ctx.moveTo(x, padT)
-    ctx.lineTo(x, padT + plotH)
+    ctx.lineTo(x, axisY)
     ctx.stroke()
+    if (bounds) {
+      const [lo, hi] = bounds
+      const yOf = (v: number) => padT + ((hi - v) / (hi - lo)) * plotH
+      const alignRight = x > padL + plotW * 0.62
+      const labelX = alignRight ? x - 8 * dpr : x + 8 * dpr
+      const readouts: { text: string; color: string; y: number }[] = []
+      for (const line of lines) {
+        const value = sampleAt(t, line.mean, playT)
+        if (value == null) continue
+        readouts.push({
+          text: formatSi(value, line.unit ?? yLabel ?? ''),
+          color: line.color,
+          y: Math.min(axisY - 8 * dpr, Math.max(padT + 8 * dpr, yOf(value))),
+        })
+      }
+      readouts.sort((a, b) => a.y - b.y)
+      const gap = 14 * dpr
+      for (let i = 1; i < readouts.length; i++) {
+        if (readouts[i].y - readouts[i - 1].y < gap) {
+          readouts[i].y = readouts[i - 1].y + gap
+        }
+      }
+      if (readouts.length && readouts[readouts.length - 1].y > axisY - 8 * dpr) {
+        let shift = readouts[readouts.length - 1].y - (axisY - 8 * dpr)
+        for (const item of readouts) item.y -= shift
+        if (readouts[0].y < padT + 8 * dpr) {
+          shift = padT + 8 * dpr - readouts[0].y
+          for (const item of readouts) item.y += shift
+        }
+      }
+      ctx.font = `${Math.round(11 * dpr)}px "IBM Plex Mono", monospace`
+      ctx.textAlign = alignRight ? 'right' : 'left'
+      ctx.textBaseline = 'middle'
+      for (const item of readouts) {
+        const tw = ctx.measureText(item.text).width
+        const th = 14 * dpr
+        const pad = 3 * dpr
+        const boxX = alignRight ? labelX - tw - pad : labelX - pad
+        ctx.fillStyle = 'rgba(8, 11, 16, 0.78)'
+        ctx.fillRect(boxX, item.y - th / 2, tw + pad * 2, th)
+        ctx.fillStyle = item.color
+        ctx.fillText(item.text, labelX, item.y)
+      }
+    }
   }
 }
 
@@ -280,13 +400,13 @@ export function GraphPlot({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const visible = lines.filter((line) => !hidden?.[line.id])
-  const dataRef = useRef({ t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots })
+  const dataRef = useRef({ t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin })
   const yHoldRef = useRef({ octave: 0, bounds: null as [number, number] | null })
   const scrubRef = useRef({ center, duration, rangeMin, rangeMax, t0, t1, lockFront, lockBack, onScrub })
   scrubRef.current = { center, duration, rangeMin, rangeMax, t0, t1, lockFront, lockBack, onScrub }
 
   useEffect(() => {
-    dataRef.current = { t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots }
+    dataRef.current = { t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin }
     const canvas = canvasRef.current
     if (!canvas) return
     const paint = () => {
@@ -312,13 +432,14 @@ export function GraphPlot({
         d.formatTick,
         yHoldRef.current,
         d.sampleDots,
+        d.rangeMin,
       )
     }
     paint()
     const observer = new ResizeObserver(paint)
     observer.observe(canvas)
     return () => observer.disconnect()
-  }, [t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots])
+  }, [t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin])
 
   useEffect(() => {
     const root = rootRef.current

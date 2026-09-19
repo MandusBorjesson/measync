@@ -50,6 +50,62 @@ export function savePlotPoints(value: number) {
   return next
 }
 
+const SI_PREFIXES: { exp: number; symbol: string }[] = [
+  { exp: -24, symbol: 'y' },
+  { exp: -21, symbol: 'z' },
+  { exp: -18, symbol: 'a' },
+  { exp: -15, symbol: 'f' },
+  { exp: -12, symbol: 'p' },
+  { exp: -9, symbol: 'n' },
+  { exp: -6, symbol: 'µ' },
+  { exp: -3, symbol: 'm' },
+  { exp: 0, symbol: '' },
+  { exp: 3, symbol: 'k' },
+  { exp: 6, symbol: 'M' },
+  { exp: 9, symbol: 'G' },
+  { exp: 12, symbol: 'T' },
+  { exp: 15, symbol: 'P' },
+  { exp: 18, symbol: 'E' },
+]
+
+const NO_SI_PREFIX = new Set(['°C', 'C', '%', 'dB'])
+
+function formatMantissa(scaled: number) {
+  if (scaled >= 100) return scaled.toFixed(0)
+  if (scaled >= 10) return scaled.toFixed(1)
+  return scaled.toFixed(2)
+}
+
+/** SI prefix when it fits (12.0mA, 3.30kV); scientific notation otherwise. */
+export function formatSi(value: number, unit = '') {
+  if (!Number.isFinite(value)) return '—'
+  if (value === 0) return unit ? `0${unit}` : '0'
+  const sign = value < 0 ? '-' : ''
+  const abs = Math.abs(value)
+  if (NO_SI_PREFIX.has(unit)) {
+    if (abs >= 1e4 || abs < 1e-3) return `${value.toExponential(2)}${unit}`
+    if (abs >= 100) return `${sign}${abs.toFixed(0)}${unit}`
+    if (abs >= 10) return `${sign}${abs.toFixed(1)}${unit}`
+    return `${sign}${abs.toFixed(2)}${unit}`
+  }
+  if (!unit) {
+    if (abs >= 1e4 || abs < 1e-3) return value.toExponential(2)
+    return sign + formatMantissa(abs)
+  }
+  let exp = Math.floor(Math.log10(abs) / 3) * 3
+  let scaled = abs / 10 ** exp
+  if (scaled >= 1000) {
+    exp += 3
+    scaled = abs / 10 ** exp
+  } else if (scaled < 1) {
+    exp -= 3
+    scaled = abs / 10 ** exp
+  }
+  const prefix = SI_PREFIXES.find((item) => item.exp === exp)
+  if (!prefix) return `${value.toExponential(2)}${unit}`
+  return `${sign}${formatMantissa(scaled)}${prefix.symbol}${unit}`
+}
+
 export function formatRate(hz: number) {
   if (hz >= 1_000_000) return `${hz / 1_000_000} MHz`
   if (hz >= 1000) return `${hz / 1000} kHz`

@@ -120,7 +120,6 @@ export function ThermalGraph({
       sampleDots={!!series.raw}
       yLabel="°C"
       emptyHint="global min / max / center · drag a zone on the image"
-      formatTick={(value) => value.toFixed(1)}
     />
   )
 }
