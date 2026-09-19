@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchJoulescopeSeries, setSourceOutput, setSourceRate } from '../api'
-import { emptyBand, formatRate } from '../graph'
+import { emptyBand, formatRate, LIVE_FETCH_MS } from '../graph'
 import type { JoulescopeChannel, JoulescopeSeries, SourceInfo } from '../types'
 import { queryWindow, type Viewport } from '../viewport'
 import { GraphPlot } from './GraphPlot'
@@ -94,8 +94,8 @@ export function JoulescopeWidget({
           await new Promise((resolve) => window.setTimeout(resolve, 16))
           continue
         }
-        if (isLive && key === lastKey && now - lastFetch < 50) {
-          await new Promise((resolve) => window.setTimeout(resolve, 16))
+        if (isLive && now - lastFetch < LIVE_FETCH_MS) {
+          await new Promise((resolve) => window.setTimeout(resolve, LIVE_FETCH_MS - (now - lastFetch)))
           continue
         }
         try {
@@ -103,7 +103,8 @@ export function JoulescopeWidget({
           if (stopped) return
           setSeries(next)
           lastKey = key
-          lastFetch = now
+          lastFetch = performance.now()
+          if (isLive) await new Promise((resolve) => window.setTimeout(resolve, LIVE_FETCH_MS))
         } catch {
           await new Promise((resolve) => window.setTimeout(resolve, 40))
         }

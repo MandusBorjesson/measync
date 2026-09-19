@@ -28,6 +28,7 @@ import {
   zoneExtrema,
   zoneLineId,
 } from '../thermal'
+import { LIVE_FETCH_MS } from '../graph'
 import { queryWindow, type Viewport } from '../viewport'
 import { ThermalGraph } from './ThermalGraph'
 
@@ -240,8 +241,8 @@ export function ThermalWidget({
           await new Promise((resolve) => window.setTimeout(resolve, zoned ? 50 : 16))
           continue
         }
-        if (isLive && key === lastKey && now - lastFetch < 50) {
-          await new Promise((resolve) => window.setTimeout(resolve, 16))
+        if (isLive && now - lastFetch < LIVE_FETCH_MS) {
+          await new Promise((resolve) => window.setTimeout(resolve, LIVE_FETCH_MS - (now - lastFetch)))
           continue
         }
         try {
@@ -249,8 +250,8 @@ export function ThermalWidget({
           if (stopped) return
           setSeries(next)
           lastKey = key
-          lastFetch = now
-          if (zoned) await new Promise((resolve) => window.setTimeout(resolve, 80))
+          lastFetch = performance.now()
+          if (isLive) await new Promise((resolve) => window.setTimeout(resolve, LIVE_FETCH_MS))
         } catch {
           await new Promise((resolve) => window.setTimeout(resolve, 40))
         }

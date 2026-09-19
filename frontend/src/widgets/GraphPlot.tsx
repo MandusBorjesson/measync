@@ -292,8 +292,12 @@ export function GraphPlot({
     const paint = () => {
       const rect = canvas.getBoundingClientRect()
       const dpr = window.devicePixelRatio || 1
-      canvas.width = Math.max(1, Math.floor(rect.width * dpr))
-      canvas.height = Math.max(1, Math.floor(rect.height * dpr))
+      const width = Math.max(1, Math.floor(rect.width * dpr))
+      const height = Math.max(1, Math.floor(rect.height * dpr))
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width
+        canvas.height = height
+      }
       const d = dataRef.current
       draw(
         canvas,

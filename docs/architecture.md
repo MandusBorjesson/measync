@@ -43,14 +43,14 @@ Current implementation: [`frontend/src/widgets/CameraWidget.tsx`](../frontend/sr
 
 Continuous series over a window. Examples: audio amplitude, Joulescope voltage/current/power.
 
-Every graph is **1..N scalar lines**. Each viewer picks a plot budget (`GRAPH_POINTS`, default **100**, query `max_points`, clamped 16–2000). That is a local display preference, not session/layout state. If the visible window has at most that many samples, the widget plots those samples at their real timestamps with a **dot** on each point (`raw: true`). If there are more, each line is condensed with time-aligned `SeriesBuckets` (`raw: false`): the stroke is the **mean** of the bucket, and a **min/max band** is filled only when several samples collapsed into that point (`min !== max`). Dots are not drawn on the bucketed path — a one-sample bin is a line vertex, not a sample marker. Bucket edges are locked to an absolute time grid so panning does not reshuffle bins. Range queries include USB chunks that overlap the window (chunk stamps are the last sample). Thermal min and max stay **separate lines** (each may grow its own collapse band). Audio is one amplitude line. Joulescope is three lines (U, I, P) in stacked panes with independent Y-axes. Each pane autoscales Y; the scale holds while you pan at the same zoom so a near-DC channel (voltage) does not thrash.
+Every graph is **1..N scalar lines**. Each viewer picks a plot budget (`GRAPH_POINTS`, default **100**, query `max_points`, clamped 16–2000). That is a local display preference, not session/layout state. If the visible window has at most that many samples, the widget plots those samples at their real timestamps with a **dot** on each point (`raw: true`). If there are more, every graph-style widget uses the same **ingest-time bins** (`BIN_NS` = 50 ms, `t // BIN_NS`): audio, Joulescope, and thermal fill a fixed absolute grid as samples arrive. Sealed bins never change their sample set; only the open newest bin updates. A condensed query slices those bins (`raw: false`) and folds them to `max_points` if needed (mean stroke; min/max band when `count > 1`). Dots are not drawn on the bucketed path. Thermal zone traces are sampled from frames (zone geometry is tile-local) and projected onto that same ingest grid so they share timestamps with min/max/center. Range queries include USB chunks that overlap the window when returning raw samples (chunk stamps are the last sample). Thermal min and max stay **separate lines**. Audio is one amplitude line. Joulescope is three lines (U, I, P) in stacked panes with independent Y-axes. Each pane autoscales Y; the scale holds while you pan at the same zoom so a near-DC channel (voltage) does not thrash. Live graph HTTP pumps wait ~200 ms between fetches.
 
 | Mode | Behavior |
 |------|----------|
 | Growing buffer (preview or recording) | Query the **currently selected window** (`t0`–`t1`) from the live ring (or the capture ring while recording). Lock front pins the right edge at `t_max`; lock back pins the left edge at `t_min`; both locks fit the full interval. |
 | Scrub | Same range query, centered on the selected timestamp. |
 
-Current implementation: [`frontend/src/widgets/GraphPlot.tsx`](../frontend/src/widgets/GraphPlot.tsx) plus [`AudioWidget.tsx`](../frontend/src/widgets/AudioWidget.tsx) (`GET /api/session/audio/{id}/waveform?t0=&t1=&max_points=`), [`JoulescopeWidget.tsx`](../frontend/src/widgets/JoulescopeWidget.tsx) (`GET /api/session/joulescope/{id}/series?t0=&t1=&max_points=`). Downsampling lives in [`backend/measync/graph.py`](../backend/measync/graph.py).
+Current implementation: [`frontend/src/widgets/GraphPlot.tsx`](../frontend/src/widgets/GraphPlot.tsx) plus [`AudioWidget.tsx`](../frontend/src/widgets/AudioWidget.tsx) (`GET /api/session/audio/{id}/waveform?t0=&t1=&max_points=`), [`JoulescopeWidget.tsx`](../frontend/src/widgets/JoulescopeWidget.tsx) (`GET /api/session/joulescope/{id}/series?t0=&t1=&max_points=`). Ingest-time bins live in [`backend/measync/graph.py`](../backend/measync/graph.py) (`IngestBins`) and are filled from each graph track’s append.
 
 ### Hybrid
 
@@ -59,7 +59,7 @@ One tile, two queries: a real-time snapshot on top and a graph of the selected w
 | Pane | Behavior |
 |------|----------|
 | Upper (image) | Same as real-time: live `/ws/live` (including while a capture exists) or closest snapshot `GET /api/session/thermal/{id}/frame?t=`. |
-| Lower (graph) | Same as graph: `GET /api/session/thermal/{id}/series?t0=&t1=` for the selected window. Optional `zones=x,y,w,h;…` (sensor pixels) adds per-zone min/max series. Each series is a scalar line; condensed windows draw a mean stroke plus a min/max band. |
+| Lower (graph) | Same as graph: `GET /api/session/thermal/{id}/series?t0=&t1=` for the selected window, using the same ingest-time bins as other graph tiles. Optional `zones=x,y,w,h;…` (sensor pixels) adds per-zone min/max series projected onto that grid. |
 
 Users drag rectangles on the feed to mark zones. Each zone shows local min/max on the image; the graph plots those traces next to global min / max / center, with legend labels. Zone geometry lives on the tile spec (presence/layout), not in the ring.
 
@@ -130,19 +130,20 @@ flowchart TB
 | [`backend/measync/main.py`](../backend/measync/main.py) | FastAPI app, CORS, all HTTP and WebSocket routes. No capture or ring logic. |
 | [`backend/measync/session.py`](../backend/measync/session.py) | Orchestrator: recording flag, `dirty`, source handles, capture `ring` and preview `live_ring`, data dirs. `query_ring` returns the capture ring whenever a take exists. |
 | [`backend/measync/capture.py`](../backend/measync/capture.py) | Per-source daemon thread. Publishes live while the device is open; on drop, publishes `{type: "offline"}`, releases, and retries until the device returns. `Session.store_*` appends to `live_ring` only in preview (empty capture, not recording) and to the capture ring only while `recording`. Stop writes nowhere. Joulescope sample-rate and current-port (`i_range`) changes are applied on this thread, not from USB callbacks. |
-| [`backend/measync/ring.py`](../backend/measync/ring.py) | `CamTrack` / `AudioTrack` / `JoulescopeTrack` / `RingBuffer`. Thread-locked; global time-aligned eviction. Optional `keep_ns` trims to a trailing time window (live ring). `CamTrack` holds camera JPEGs and thermal `THRM` snapshots (`kind` on the track) and can emit a thermal temperature series. `JoulescopeTrack` stores chunked U/I/P samples at the user-selected rate. |
+| [`backend/measync/ring.py`](../backend/measync/ring.py) | `CamTrack` / `AudioTrack` / `JoulescopeTrack` / `RingBuffer`. Thread-locked; global time-aligned eviction (raw chunks and ingest bins share the horizon). Optional `keep_ns` trims to a trailing time window (live ring). `CamTrack` holds camera JPEGs and thermal `THRM` snapshots (`kind` on the track); thermal tracks also fill 50 ms ingest bins for min/max/center. `JoulescopeTrack` stores chunked U/I/P samples plus the same ingest bins. |
 | [`backend/measync/livehub.py`](../backend/measync/livehub.py) | Thread → asyncio fan-out. Per-source queues (`maxsize` 2); drop oldest on overflow. `{type: "offline"}` is fanned out and is **not** kept as `latest`. |
 | [`backend/measync/presence.py`](../backend/measync/presence.py) | Peers, viewport broadcast, shared layout (last writer wins). |
 | [`backend/measync/devices.py`](../backend/measync/devices.py) | Enumerate cameras, Infiray thermals, mics, and Joulescopes. |
 | [`backend/measync/thermal.py`](../backend/measync/thermal.py) | Infiray P2 Pro decode, colormap JPEG, snapshot packing, zone extrema, series points. |
 | [`backend/measync/joulescope.py`](../backend/measync/joulescope.py) | Scan, serial match, supported output rates, current-port apply. |
-| [`backend/measync/graph.py`](../backend/measync/graph.py) | Shared `bucket_series` / `SeriesBuckets` mean/min/max downsampling for all graph lines. Default budget `GRAPH_POINTS` (100); APIs accept `max_points`. |
+| [`backend/measync/graph.py`](../backend/measync/graph.py) | `IngestBins` is the common graph downsample path (50 ms grid; audio, Joulescope, thermal). Viewer budget `GRAPH_POINTS` (100); APIs accept `max_points`. |
 | [`backend/measync/persist.py`](../backend/measync/persist.py) | Capture save/load under `data/captures/`. |
 | [`backend/measync/profiles.py`](../backend/measync/profiles.py) | Profile CRUD; `safe_name()` sanitization. |
 | [`backend/measync/models.py`](../backend/measync/models.py) | Pydantic request/response schemas. |
 | [`frontend/src/App.tsx`](../frontend/src/App.tsx) | Session poll, presence socket, recording/reset, layout sync. |
 | [`frontend/src/layout.ts`](../frontend/src/layout.ts) | Binary tree ops: split, remove, swap, dock, resize (ratio 0.15–0.85). |
 | [`frontend/src/viewport.ts`](../frontend/src/viewport.ts) | Shared viewer window math: lock front/back, wheel zoom, drag pan/seek. |
+| [`frontend/src/graph.ts`](../frontend/src/graph.ts) | Shared graph helpers, viewer plot budget, live fetch interval (~200 ms). |
 | [`frontend/src/components/Mosaic.tsx`](../frontend/src/components/Mosaic.tsx) | Recursive tiles; drag-drop relocate; widget host. |
 | [`frontend/src/components/Timeline.tsx`](../frontend/src/components/Timeline.tsx) | Scrub, zoom, peer markers, follow-peer. Gestures share [`viewport.ts`](../frontend/src/viewport.ts) with graph tiles. |
 | [`frontend/src/widgets/GraphPlot.tsx`](../frontend/src/widgets/GraphPlot.tsx) | Shared 1..N line plot with collapse bands; wheel-zoom / drag-pan updates the viewer window |

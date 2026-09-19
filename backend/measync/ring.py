@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from measync.graph import GRAPH_POINTS, SeriesBuckets, align_window, bucket_series, raw_band
+from measync.graph import GRAPH_POINTS, IngestBins, align_window, prefer_raw, raw_band
 
 JPEG_OVERHEAD = 24
 PCM_OVERHEAD = 32
@@ -92,6 +92,7 @@ class CamTrack:
     kind: str = "camera"
     t: list[int] = field(default_factory=list)
     jpeg: list[bytes] = field(default_factory=list)
+    bins: IngestBins = field(default_factory=lambda: IngestBins(3))
     start: int = 0
 
     def __len__(self) -> int:
@@ -100,6 +101,18 @@ class CamTrack:
     def append(self, t_ns: int, jpeg: bytes) -> int:
         self.t.append(t_ns)
         self.jpeg.append(jpeg)
+        if self.kind == "thermal":
+            from measync.thermal import peek_stats
+
+            stats = peek_stats(jpeg)
+            if stats is not None:
+                lo, hi, mid = stats
+                self.bins.add(
+                    np.array([t_ns], dtype=np.int64),
+                    np.array([lo], dtype=np.float64),
+                    np.array([hi], dtype=np.float64),
+                    np.array([mid], dtype=np.float64),
+                )
         return len(jpeg) + JPEG_OVERHEAD
 
     def pop_while_at_or_before(self, horizon_ns: int) -> int:
@@ -107,6 +120,7 @@ class CamTrack:
         while self.start < len(self.t) and self.t[self.start] <= horizon_ns:
             freed += len(self.jpeg[self.start]) + JPEG_OVERHEAD
             self.start += 1
+        self.bins.pop_while_at_or_before(horizon_ns)
         self._compact()
         return freed
 
@@ -136,8 +150,6 @@ class CamTrack:
         return self.jpeg[i]
 
     def series(self, t0: int, t1: int, zones: list | None = None, max_points: int = GRAPH_POINTS) -> dict:
-        from measync.thermal import peek_coarse, peek_stats, series_point
-
         rects = list(zones or ())
         empty_zones = [{"min": _empty_band(), "max": _empty_band()} for _ in rects]
         empty = {
@@ -154,19 +166,32 @@ class CamTrack:
         i1 = bisect_right(self.t, t1, self.start)
         i0 = max(i0, self.start)
         i1 = max(i1, i0)
-        span = i1 - i0
-        if span <= 0:
+        if i1 <= i0:
             return empty
-        inspect = 1
-        if rects and peek_coarse(self.jpeg[i0]) is None:
-            inspect = max(1, span // 120)
+        if prefer_raw(i1 - i0, max_points):
+            return self._raw_series(i0, i1, t0, t1, rects, empty)
+        gmin, gmax, gcenter = self.bins.emit(t0, t1, max_points)
+        if not gmin["t"]:
+            return empty
+        return {
+            "t": gmin["t"],
+            "min": _drop_t(gmin),
+            "max": _drop_t(gmax),
+            "center": _drop_t(gcenter),
+            "zones": self._zone_bands(i0, i1, t0, t1, rects, max_points) if rects else empty_zones,
+            "raw": False,
+        }
+
+    def _raw_series(self, i0: int, i1: int, t0: int, t1: int, rects: list, empty: dict) -> dict:
+        from measync.thermal import peek_stats, series_point
+
         ts: list[int] = []
-        mins: list[float | None] = []
-        maxs: list[float | None] = []
-        centers: list[float | None] = []
+        mins: list[float] = []
+        maxs: list[float] = []
+        centers: list[float] = []
         zone_mins: list[list[float | None]] = [[] for _ in rects]
         zone_maxs: list[list[float | None]] = [[] for _ in rects]
-        for k in range(i0, i1, inspect):
+        for k in range(i0, i1):
             stats = peek_stats(self.jpeg[k])
             if stats is None:
                 continue
@@ -183,23 +208,51 @@ class CamTrack:
                     zone_maxs[idx].append(z.get("max"))
         if not ts:
             return empty
-        gmin = bucket_series(ts, mins, t0, t1, max_points)
-        gmax = bucket_series(ts, maxs, t0, t1, max_points)
-        gcenter = bucket_series(ts, centers, t0, t1, max_points)
+        ts_arr = np.asarray(ts, dtype=np.int64)
+        gmin = raw_band(ts_arr, np.asarray(mins, dtype=np.float64))
         return {
             "t": gmin["t"],
             "min": _drop_t(gmin),
-            "max": _drop_t(gmax),
-            "center": _drop_t(gcenter),
+            "max": _drop_t(raw_band(ts_arr, np.asarray(maxs, dtype=np.float64))),
+            "center": _drop_t(raw_band(ts_arr, np.asarray(centers, dtype=np.float64))),
             "zones": [
                 {
-                    "min": _drop_t(bucket_series(ts, zone_mins[idx], t0, t1, max_points)),
-                    "max": _drop_t(bucket_series(ts, zone_maxs[idx], t0, t1, max_points)),
+                    "min": _drop_t(raw_band(ts_arr, zone_mins[idx])),
+                    "max": _drop_t(raw_band(ts_arr, zone_maxs[idx])),
                 }
                 for idx in range(len(rects))
             ],
-            "raw": bool(gmin.get("raw")),
+            "raw": True,
         }
+
+    def _zone_bands(self, i0: int, i1: int, t0: int, t1: int, rects: list, max_points: int) -> list[dict]:
+        from measync.thermal import peek_coarse, series_point
+
+        inspect = 1
+        if peek_coarse(self.jpeg[i0]) is None:
+            inspect = max(1, (i1 - i0) // 120)
+        ts: list[int] = []
+        zone_mins: list[list[float | None]] = [[] for _ in rects]
+        zone_maxs: list[list[float | None]] = [[] for _ in rects]
+        for k in range(i0, i1, inspect):
+            point = series_point(self.jpeg[k], rects)
+            if point is None:
+                continue
+            ts.append(self.t[k])
+            zvals = point["zones"]
+            for idx, z in enumerate(zvals):
+                zone_mins[idx].append(z.get("min"))
+                zone_maxs[idx].append(z.get("max"))
+        if not ts:
+            return [{"min": _empty_band(), "max": _empty_band()} for _ in rects]
+        ts_arr = np.asarray(ts, dtype=np.int64)
+        return [
+            {
+                "min": _drop_t(self.bins.project(ts_arr, zone_mins[idx], t0, t1, max_points)),
+                "max": _drop_t(self.bins.project(ts_arr, zone_maxs[idx], t0, t1, max_points)),
+            }
+            for idx in range(len(rects))
+        ]
 
 
 @dataclass
@@ -210,6 +263,7 @@ class AudioTrack:
     pcm: list[np.ndarray] = field(default_factory=list)
     pmin: list[float] = field(default_factory=list)
     pmax: list[float] = field(default_factory=list)
+    bins: IngestBins = field(default_factory=IngestBins)
     start: int = 0
 
     def __len__(self) -> int:
@@ -221,6 +275,7 @@ class AudioTrack:
         self.pcm.append(chunk)
         self.pmin.append(float(chunk.min()) if chunk.size else 0.0)
         self.pmax.append(float(chunk.max()) if chunk.size else 0.0)
+        self.bins.add(_sample_times(t_ns, int(chunk.size), self.sample_rate), chunk)
         return int(chunk.nbytes) + PCM_OVERHEAD
 
     def pop_while_at_or_before(self, horizon_ns: int) -> int:
@@ -228,6 +283,7 @@ class AudioTrack:
         while self.start < len(self.t) and self.t[self.start] <= horizon_ns:
             freed += int(self.pcm[self.start].nbytes) + PCM_OVERHEAD
             self.start += 1
+        self.bins.pop_while_at_or_before(horizon_ns)
         self._compact()
         return freed
 
@@ -268,17 +324,29 @@ class AudioTrack:
         i0, i1 = _chunks_overlapping(self.t, self.start, t0, t1)
         if i1 <= i0:
             return empty
-        ts_parts: list[np.ndarray] = []
-        ys_parts: list[np.ndarray] = []
+        count = 0
         for i in range(i0, i1):
-            chunk = self.pcm[i]
-            if chunk.size == 0:
-                continue
-            ts_parts.append(_sample_times(self.t[i], int(chunk.size), self.sample_rate))
-            ys_parts.append(chunk)
-        if not ts_parts:
-            return empty
-        band = bucket_series(np.concatenate(ts_parts), np.concatenate(ys_parts), t0, t1, max_points)
+            count += _in_window_count(self.t[i], int(self.pcm[i].size), self.sample_rate, t0, t1)
+            if count > max_points:
+                break
+        if prefer_raw(count, max_points):
+            ts_parts: list[np.ndarray] = []
+            ys_parts: list[np.ndarray] = []
+            for i in range(i0, i1):
+                chunk = self.pcm[i]
+                if chunk.size == 0:
+                    continue
+                ts_parts.append(_sample_times(self.t[i], int(chunk.size), self.sample_rate))
+                ys_parts.append(chunk)
+            if not ts_parts:
+                return empty
+            ts, channels = align_window(np.concatenate(ts_parts), [np.concatenate(ys_parts)], t0, t1)
+            if ts.size == 0:
+                return empty
+            band = raw_band(ts, channels[0])
+            band["sample_rate"] = self.sample_rate
+            return band
+        band = self.bins.emit(t0, t1, max_points)[0]
         band["sample_rate"] = self.sample_rate
         return band
 
@@ -292,6 +360,7 @@ class JoulescopeTrack:
     current: list[np.ndarray] = field(default_factory=list)
     voltage: list[np.ndarray] = field(default_factory=list)
     power: list[np.ndarray] = field(default_factory=list)
+    bins: IngestBins = field(default_factory=lambda: IngestBins(3))
     start: int = 0
 
     def __len__(self) -> int:
@@ -314,6 +383,7 @@ class JoulescopeTrack:
         self.voltage.append(v)
         self.power.append(p)
         self.sample_rate = int(sample_rate)
+        self.bins.add(_sample_times(t_ns, n, int(sample_rate)), i, v, p)
         return int(i.nbytes + v.nbytes + p.nbytes) + GRAPH_OVERHEAD
 
     def pop_while_at_or_before(self, horizon_ns: int) -> int:
@@ -322,6 +392,7 @@ class JoulescopeTrack:
             n = int(self.current[self.start].nbytes + self.voltage[self.start].nbytes + self.power[self.start].nbytes)
             freed += n + GRAPH_OVERHEAD
             self.start += 1
+        self.bins.pop_while_at_or_before(horizon_ns)
         self._compact()
         return freed
 
@@ -359,27 +430,14 @@ class JoulescopeTrack:
             count += _in_window_count(self.t[k], int(self.current[k].size), self.rates[k], t0, t1)
             if count > max_points:
                 break
-        if count <= max_points:
+        if prefer_raw(count, max_points):
             return self._raw_series(i0, i1, t0, t1, empty)
-        current_b = SeriesBuckets(t0, t1, max_points)
-        voltage_b = SeriesBuckets(t0, t1, max_points)
-        power_b = SeriesBuckets(t0, t1, max_points)
-        for k in range(i0, i1):
-            chunk = self.current[k]
-            n = int(chunk.size)
-            if n <= 0:
-                continue
-            ts = _sample_times(self.t[k], n, self.rates[k])
-            current_b.add(ts, chunk)
-            voltage_b.add(ts, self.voltage[k])
-            power_b.add(ts, self.power[k])
-        occ = current_b.occupied() | voltage_b.occupied() | power_b.occupied()
-        current = current_b.finish(occ)
+        current, voltage, power = self.bins.emit(t0, t1, max_points)
         return {
             "t": current["t"],
             "current": _drop_t(current),
-            "voltage": _drop_t(voltage_b.finish(occ)),
-            "power": _drop_t(power_b.finish(occ)),
+            "voltage": _drop_t(voltage),
+            "power": _drop_t(power),
             "sample_rate": self.sample_rate,
             "raw": False,
         }
@@ -590,6 +648,7 @@ class RingBuffer:
                 snap = CamTrack(label=track.label, kind=track.kind)
                 snap.t = list(track.t[track.start :])
                 snap.jpeg = list(track.jpeg[track.start :])
+                snap.bins = track.bins.copy()
                 cameras[sid] = snap
             audios: dict[str, AudioTrack] = {}
             for sid, track in self.audio.items():
@@ -598,6 +657,7 @@ class RingBuffer:
                 snap.pcm = list(track.pcm[track.start :])
                 snap.pmin = list(track.pmin[track.start :])
                 snap.pmax = list(track.pmax[track.start :])
+                snap.bins = track.bins.copy()
                 audios[sid] = snap
             scopes: dict[str, JoulescopeTrack] = {}
             for sid, track in self.joulescope.items():
@@ -607,6 +667,7 @@ class RingBuffer:
                 snap.current = list(track.current[track.start :])
                 snap.voltage = list(track.voltage[track.start :])
                 snap.power = list(track.power[track.start :])
+                snap.bins = track.bins.copy()
                 scopes[sid] = snap
             return cameras, audios, scopes, self.used
 

@@ -15,23 +15,28 @@ def test_clamp_graph_points():
     assert clamp_graph_points(100) == 100
 
 
-def test_bucket_series_step_and_bands():
-    from measync.graph import bucket_series
+def test_ingest_bins_step_and_bands():
+    from measync.graph import IngestBins
 
-    t = np.arange(0, 100, dtype=np.int64)
-    y = np.arange(0, 100, dtype=np.float64)
-    one = bucket_series(t, y, 0, 100, max_points=200)
-    assert len(one["t"]) == 100
-    assert one["mean"] == one["min"] == one["max"]
-    many = bucket_series(t, y, 0, 100, max_points=10)
-    assert 8 <= len(many["t"]) <= 12
-    for mean, lo, hi in zip(many["mean"], many["min"], many["max"], strict=True):
+    t = np.arange(0, 200, dtype=np.int64) * 10_000_000
+    y = np.arange(0, 200, dtype=np.float64)
+    bins = IngestBins(1)
+    bins.add(t, y)
+    one = bins.emit(int(t[0]), int(t[-1]), max_points=400)
+    assert one[0]["raw"] is False
+    assert 30 <= len(one[0]["t"]) <= 50
+    many = bins.emit(int(t[0]), int(t[-1]), max_points=10)
+    assert 8 <= len(many[0]["t"]) <= 12
+    for mean, lo, hi in zip(many[0]["mean"], many[0]["min"], many[0]["max"], strict=True):
         assert lo is not None and hi is not None and mean is not None
         assert lo <= mean <= hi
         assert hi > lo
-    gaps = bucket_series(t, [np.nan] * 50 + list(range(50)), 0, 100, max_points=200)
-    assert gaps["mean"][0] == 0.0
-    assert gaps["t"][0] == 50
+    gappy = IngestBins(1)
+    gappy.add(t[:50], np.full(50, np.nan))
+    gappy.add(t[50:], y[50:])
+    wide = gappy.emit(int(t[0]), int(t[-1]), max_points=400)
+    assert wide[0]["mean"][0] is not None
+    assert abs(wide[0]["mean"][0] - 52.0) < 1e-6
 
 
 def test_sample_times_follow_instrument_rate():
@@ -242,6 +247,40 @@ def test_thermal_decode_and_persist(tmp_path: Path):
     assert loaded_series is not None and abs(loaded_series["zones"][0]["max"]["mean"][0] - 40.0) < 0.05
 
 
+def test_thermal_ingest_bins_sealed():
+    from measync.thermal import decode_temperature, pack_snapshot
+
+    def payload(temp_c: float) -> bytes:
+        frame = np.zeros((384, 256, 2), dtype=np.uint8)
+        raw = int(round((temp_c + 273.15) * 64))
+        frame[192:, :, 0] = raw & 0xFF
+        frame[192:, :, 1] = (raw >> 8) & 0xFF
+        temp = decode_temperature(frame)
+        assert temp is not None
+        return pack_snapshot(temp, b"\xff\xd8fakejpeg")
+
+    ring = RingBuffer(cap_bytes=10_000_000)
+    cold = payload(20.0)
+    for i in range(3):
+        ring.append_camera("thermal:2", "th", i * 10_000_000, cold, kind="thermal")
+    track = ring.camera["thermal:2"]
+    assert len(track.bins.t) - track.bins.start >= 1
+    sealed_n = track.bins.counts[0][0]
+    sealed = track.bins.sums[0][0] / sealed_n
+    ring.append_camera("thermal:2", "th", 50_000_000, payload(30.0), kind="thermal")
+    ring.append_camera("thermal:2", "th", 200_000_000, payload(40.0), kind="thermal")
+    assert track.bins.counts[0][0] == sealed_n
+    assert track.bins.sums[0][0] / sealed_n == sealed
+    wide = track.series(0, 250_000_000, max_points=2)
+    assert wide["raw"] is False
+    tight = track.series(0, 25_000_000, max_points=20)
+    assert tight["raw"] is True
+    assert len(tight["t"]) == 3
+    zoned = track.series(0, 250_000_000, zones=[(8, 0, 6, 4)], max_points=2)
+    assert zoned["raw"] is False
+    assert len(zoned["zones"][0]["max"]["mean"]) == len(zoned["t"])
+
+
 def test_joulescope_series_persist(tmp_path: Path):
     ring = RingBuffer(cap_bytes=10_000_000)
     for i in range(40):
@@ -347,19 +386,17 @@ def test_series_window_includes_overlapping_chunks():
     assert all(later >= earlier for earlier, later in zip(series["t"], series["t"][1:]))
 
 
-def test_buckets_stable_when_panning():
-    from measync.graph import SeriesBuckets
+def test_ingest_bins_stable_when_panning():
+    from measync.graph import BIN_NS, IngestBins
 
-    ts = np.arange(0, 100_000, 100, dtype=np.int64)
-    ys = np.sin(ts / 5000).astype(np.float64)
-    a = SeriesBuckets(10_000, 50_000, max_points=40)
-    b = SeriesBuckets(10_100, 50_100, max_points=40)
-    a.add(ts, ys)
-    b.add(ts, ys)
-    left = a.finish()
-    right = b.finish()
-    overlap = [t for t in left["t"] if t in set(right["t"]) and 12_000 <= t <= 48_000]
-    assert len(overlap) >= 20
+    ts = np.arange(0, 40, dtype=np.int64) * BIN_NS + 1_000_000
+    ys = np.sin(np.arange(40) * 0.3)
+    bins = IngestBins(1)
+    bins.add(ts, ys)
+    left = bins.emit(0, 20 * BIN_NS, max_points=40)[0]
+    right = bins.emit(2 * BIN_NS, 22 * BIN_NS, max_points=40)[0]
+    overlap = [t for t in left["t"] if t in set(right["t"])]
+    assert len(overlap) >= 10
     by_t = {t: m for t, m in zip(left["t"], left["mean"], strict=True)}
     right_by_t = {t: m for t, m in zip(right["t"], right["mean"], strict=True)}
     for t in overlap:
@@ -516,11 +553,55 @@ def test_live_seed_and_independent_eviction():
     session.shutdown()
 
 
+def test_ingest_bins_only_newest_changes():
+    ring = RingBuffer(cap_bytes=10_000_000)
+    first = np.arange(60, dtype=np.float32)
+    ring.append_joulescope("joulescope:0", "js", 1000, 59_000_000, first, first, first)
+    track = ring.joulescope["joulescope:0"]
+    assert len(track.bins.t) - track.bins.start >= 2
+    sealed_n = track.bins.counts[0][0]
+    sealed = track.bins.sums[0][0] / sealed_n
+    later = np.full(20, 50.0, dtype=np.float32)
+    ring.append_joulescope("joulescope:0", "js", 1000, 200_000_000, later, later, later)
+    assert track.bins.counts[0][0] == sealed_n
+    assert track.bins.sums[0][0] / sealed_n == sealed
+    wide = track.series(0, 250_000_000, max_points=20)
+    assert wide["raw"] is False
+    tight = track.series(0, 8_000_000, max_points=100)
+    assert tight["raw"] is True
+    assert len(tight["t"]) >= 5
+    left = track.series(0, 120_000_000, max_points=20)
+    right = track.series(10_000_000, 130_000_000, max_points=20)
+    by_t = {t: i for t, i in zip(left["t"], left["current"]["mean"], strict=True)}
+    overlap = 0
+    for t, i in zip(right["t"], right["current"]["mean"], strict=True):
+        if t not in by_t:
+            continue
+        overlap += 1
+        assert i == by_t[t]
+    assert overlap >= 1
+
+
+def test_ingest_bins_evict_with_chunks():
+    ring = RingBuffer(cap_bytes=2500)
+    for i in range(30):
+        t = 80_000_000 + i * 50_000_000
+        y = np.full(8, float(i), dtype=np.float32)
+        ring.append_joulescope("joulescope:0", "js", 1000, t, y, y, y)
+    track = ring.joulescope["joulescope:0"]
+    t_min, t_max = ring.range_ns()
+    assert t_min is not None and t_max is not None
+    series = track.series(t_min, t_max, max_points=20)
+    assert len(series["t"]) > 0
+    assert track.bins.start < len(track.bins.last_t)
+    assert track.bins.last_t[track.bins.start] > t_min - 50_000_000
+
+
 if __name__ == "__main__":
     import shutil
 
     test_clamp_graph_points()
-    test_bucket_series_step_and_bands()
+    test_ingest_bins_step_and_bands()
     test_sample_times_follow_instrument_rate()
     test_available_sample_span_skips_wrapped_ids()
     test_overlapping_joulescope_chunk_does_not_rewrite_history()
@@ -538,10 +619,13 @@ if __name__ == "__main__":
     test_livehub_offline_drops_latest()
     test_joulescope_output()
     test_series_window_includes_overlapping_chunks()
-    test_buckets_stable_when_panning()
+    test_ingest_bins_stable_when_panning()
+    test_thermal_ingest_bins_sealed()
     test_overlapping_chunk_times_stay_monotonic()
     test_raw_samples_stable_when_panning()
     test_device_buffer_alias_does_not_rewrite_history()
     test_query_ring_stays_on_capture_take()
     test_live_seed_and_independent_eviction()
+    test_ingest_bins_only_newest_changes()
+    test_ingest_bins_evict_with_chunks()
     print("ok")

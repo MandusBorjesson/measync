@@ -13,8 +13,8 @@ Lab workbench: tiled live sources, a short ~5 s preview ring plus one RAM captur
 Widgets are built from two playback models. Most tiles use one; hybrid tiles compose both. Do not add a third scrub/playback model.
 
 - **Real-time** (cameras today; text logs later) — closest **snapshot** to the selected timestamp (window centre).
-- **Graph** (audio and Joulescope today) — render the **selected window**, centered on that timestamp. Zoomed in, those are the real samples; condensed windows are a mean line plus a min/max band.
-- **Hybrid** (Infiray thermals today) — snapshot on top, selected-window graph below. Same two query types, one tile.
+- **Graph** (audio and Joulescope today) — render the **selected window**, centered on that timestamp. Zoomed in, those are the real samples; condensed windows use ingest-time 50 ms bins (sealed bins never change; only the open newest bin updates) folded to the viewer budget. This is the common path for every graph-style widget.
+- **Hybrid** (Infiray thermals today) — snapshot on top, selected-window graph below. Same two query types, one tile; the graph pane uses the same ingest-time bins.
 
 Live camera/thermal **images** still use `/ws/live/{source_id}` while the buffer is growing and lock front is on. Graph tiles always render the selected window via HTTP range queries. Wheel-zoom / drag-pan on graphs and the timeline share [`frontend/src/viewport.ts`](frontend/src/viewport.ts) (lock front / lock back).
 

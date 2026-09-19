@@ -27,6 +27,7 @@ export function hasBand(min: number | null, max: number | null) {
   return min != null && max != null && Number.isFinite(min) && Number.isFinite(max) && min !== max
 }
 
+export const LIVE_FETCH_MS = 200
 export const GRAPH_POINTS = 100
 export const GRAPH_POINTS_MIN = 16
 export const GRAPH_POINTS_MAX = 2000
