@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  fetchPcm,
   fetchSession,
+  resetSession,
   setCap,
   startRecording,
   startSource,
@@ -16,8 +16,9 @@ import { ProfileMenu } from './components/ProfileMenu'
 import { Timeline } from './components/Timeline'
 import { addLeaf, collectLeaves, removeLeaf, splitExisting } from './layout'
 import type { Kind, Layout, Peer, SessionStatus, SplitDir, TileSpec } from './types'
+import { applyLocks, DEFAULT_DURATION_NS, viewRange, type Viewport } from './viewport'
 
-const DEFAULT_DURATION = 2_000_000_000
+const DEFAULT_DURATION = DEFAULT_DURATION_NS
 const NAME_KEY = 'measync.displayName'
 
 function formatBytes(n: number) {
@@ -35,7 +36,8 @@ export default function App() {
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const [splitDir, setSplitDir] = useState<SplitDir>('v')
   const [splitTarget, setSplitTarget] = useState<string | null>(null)
-  const [live, setLive] = useState(true)
+  const [lockFront, setLockFront] = useState(true)
+  const [lockBack, setLockBack] = useState(true)
   const [center, setCenter] = useState<number | null>(null)
   const [duration, setDuration] = useState(DEFAULT_DURATION)
   const [peers, setPeers] = useState<Peer[]>([])
@@ -49,18 +51,8 @@ export default function App() {
   const presenceRef = useRef<WebSocket | null>(null)
   const ignoreLayoutEcho = useRef(false)
   const [layoutHydrated, setLayoutHydrated] = useState(false)
-  const [playing, setPlaying] = useState(false)
-  const playingRef = useRef(false)
-  const sessionRef = useRef(session)
-  const tilesRef = useRef(tiles)
-  const audioCtxRef = useRef<AudioContext | null>(null)
-  const bufferSourcesRef = useRef<AudioBufferSourceNode[]>([])
-  const rafRef = useRef(0)
-  const playGen = useRef(0)
-  const viewportRef = useRef({ live, center, duration, playing })
-  sessionRef.current = session
-  tilesRef.current = tiles
-  viewportRef.current = { live, center, duration, playing }
+  const viewportRef = useRef({ lockFront, lockBack, center, duration })
+  viewportRef.current = { lockFront, lockBack, center, duration }
 
   const refreshSession = useCallback(() => {
     fetchSession()
@@ -102,7 +94,7 @@ export default function App() {
 
   useEffect(() => {
     refreshSession()
-    const id = window.setInterval(refreshSession, 250)
+    const id = window.setInterval(refreshSession, 80)
     return () => window.clearInterval(id)
   }, [refreshSession])
 
@@ -153,10 +145,10 @@ export default function App() {
       ws.send(
         JSON.stringify({
           type: 'viewport',
-          live: v.live,
+          lock_front: v.lockFront,
+          lock_back: v.lockBack,
           center: v.center,
           duration: v.duration,
-          playing: v.playing,
         }),
       )
     }
@@ -213,6 +205,8 @@ export default function App() {
     setFocusedId(tileId)
     setSplitTarget(null)
     setModal(null)
+    setLockFront(true)
+    setLockBack(true)
   }
 
   const closeTile = (id: string) => {
@@ -265,101 +259,40 @@ export default function App() {
     return window.confirm('This will discard the unsaved capture currently in RAM. Continue?')
   }
 
-  const stopPlayback = useCallback(() => {
-    playGen.current += 1
-    playingRef.current = false
-    setPlaying(false)
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    rafRef.current = 0
-    for (const node of bufferSourcesRef.current) {
-      try {
-        node.stop()
-      } catch {
-        /* already stopped */
-      }
-    }
-    bufferSourcesRef.current = []
+  const fitBothLocks = useCallback(() => {
+    setLockFront(true)
+    setLockBack(true)
   }, [])
 
-  const startPlayback = useCallback(() => {
-    const sess = sessionRef.current
-    if (sess?.t_min == null || sess.t_max == null) return
-    stopPlayback()
-    const gen = playGen.current
-    let from = !live && center != null ? center : sess.t_min
-    if (from >= sess.t_max - 20_000_000) from = sess.t_min
-    from = Math.max(sess.t_min, Math.min(from, sess.t_max))
-    setLive(false)
-    setCenter(Math.round(from))
-    playingRef.current = true
-    setPlaying(true)
-    const originWall = performance.now()
-    const originT = from
-
-    const tick = () => {
-      if (playGen.current !== gen) return
-      const tMax = sessionRef.current?.t_max ?? originT
-      const next = originT + (performance.now() - originWall) * 1e6
-      if (next >= tMax) {
-        setCenter(Math.round(tMax))
-        stopPlayback()
-        return
-      }
-      setCenter(Math.round(next))
-      rafRef.current = requestAnimationFrame(tick)
-    }
-    rafRef.current = requestAnimationFrame(tick)
-
-    const ctx = audioCtxRef.current ?? new AudioContext()
-    audioCtxRef.current = ctx
-    void ctx.resume()
-    const ctxStart = ctx.currentTime + 0.04
-    const tMax = sess.t_max
-    const audioIds = [...new Set(
-      Object.values(tilesRef.current)
-        .filter((tile) => tile.kind === 'audio')
-        .map((tile) => tile.sourceId),
-    )]
-    const CHUNK = 2_000_000_000
-    for (const sourceId of audioIds) {
-      void (async () => {
-        let t = from
-        let offset = 0
-        while (playGen.current === gen && t < tMax) {
-          const t1 = Math.min(t + CHUNK, tMax)
-          const spanSec = (t1 - t) / 1e9
-          try {
-            const { sampleRate, samples } = await fetchPcm(sourceId, t, t1)
-            if (playGen.current !== gen) return
-            if (samples.length === 0) {
-              offset += spanSec
-              t = t1
-              continue
-            }
-            const buffer = ctx.createBuffer(1, samples.length, sampleRate)
-            buffer.copyToChannel(new Float32Array(samples), 0)
-            const node = ctx.createBufferSource()
-            node.buffer = buffer
-            node.connect(ctx.destination)
-            node.start(ctxStart + offset)
-            bufferSourcesRef.current.push(node)
-            offset += samples.length / sampleRate
-          } catch {
-            if (playGen.current !== gen) return
-            offset += spanSec
-          }
-          t = t1
-        }
-      })()
-    }
-  }, [center, live, stopPlayback])
+  const applyViewport = useCallback((next: Viewport) => {
+    setLockFront(next.lockFront)
+    setLockBack(next.lockBack)
+    setCenter(Math.round(next.center))
+    setDuration(next.duration)
+  }, [])
 
   const ramRatio = session ? Math.min(1, session.bytes_used / Math.max(1, session.bytes_cap)) : 0
   const canSave = !!session && !session.recording && session.bytes_used > 0
-  const windowCenter = useMemo(() => {
-    if (live && session?.t_max != null) return session.t_max
-    return center
-  }, [live, session?.t_max, center])
+  const range = viewRange(session)
+  const hasTake = session?.t_min != null && session.t_max != null
+  const growing = !!session?.recording || !hasTake
+  const fitted = useMemo(() => {
+    if (range.tMin == null || range.tMax == null) {
+      return { center: center ?? 0, duration, lockFront, lockBack }
+    }
+    return applyLocks(center ?? range.tMax, duration, range.tMin, range.tMax, lockFront, lockBack)
+  }, [range.tMin, range.tMax, center, duration, lockFront, lockBack])
+  const windowCenter = range.tMin == null ? center : fitted.center
+  const windowDuration = range.tMin == null ? duration : fitted.duration
+
+  const setLock = (front: boolean, back: boolean) => {
+    if (range.tMin != null && range.tMax != null) {
+      applyViewport(applyLocks(fitted.center, fitted.duration, range.tMin, range.tMax, front, back))
+      return
+    }
+    setLockFront(front)
+    setLockBack(back)
+  }
 
   if (!name) {
     return (
@@ -401,47 +334,46 @@ export default function App() {
         </button>
         <button
           className={`btn btn-record${session?.recording ? ' active' : ''}`}
-          disabled={!!session?.recording}
           onClick={() => {
-            if (!confirmWipe()) return
-            stopPlayback()
+            if (session?.recording) {
+              stopRecording().then(setSession).catch((err: Error) => setError(err.message))
+              return
+            }
             startRecording()
               .then((next) => {
                 setSession(next)
-                setLive(true)
+                fitBothLocks()
               })
               .catch((err: Error) => setError(err.message))
           }}
         >
-          Start
+          {session?.recording ? 'Stop' : 'Record'}
         </button>
         <button
-          className="btn btn-stop"
-          disabled={!session?.recording}
+          className="btn"
           onClick={() => {
-            stopRecording().then(setSession).catch((err: Error) => setError(err.message))
+            if (!confirmWipe()) return
+            resetSession()
+              .then((next) => {
+                setSession(next)
+                fitBothLocks()
+              })
+              .catch((err: Error) => setError(err.message))
           }}
         >
-          Stop
+          Reset
         </button>
         <button
-          className={`btn btn-play${playing ? ' active' : ''}`}
-          disabled={!session?.t_min || !session.t_max || playing}
-          onClick={() => startPlayback()}
+          className={`btn btn-lock${lockBack ? ' active' : ''}`}
+          onClick={() => setLock(lockFront, !lockBack)}
         >
-          Play
-        </button>
-        <button className="btn" disabled={!playing} onClick={() => stopPlayback()}>
-          Pause
+          Lock back
         </button>
         <button
-          className={`btn btn-live${live ? ' active' : ''}`}
-          onClick={() => {
-            stopPlayback()
-            setLive(true)
-          }}
+          className={`btn btn-lock${lockFront ? ' active' : ''}`}
+          onClick={() => setLock(!lockFront, lockBack)}
         >
-          Live
+          Lock front
         </button>
         <button className="btn" disabled={!canSave && !(session && !session.recording)} onClick={() => setModal('captures')}>
           Captures
@@ -476,14 +408,16 @@ export default function App() {
             layout={layout}
             tiles={tiles}
             focusedId={focusedId}
-            live={live}
-            playing={playing}
+            live={growing}
+            lockFront={lockFront}
+            lockBack={lockBack}
             hasCapture={session?.t_min != null}
             recording={!!session?.recording}
             center={windowCenter}
-            origin={session?.t_min ?? null}
-            tMax={session?.t_max ?? null}
-            duration={duration}
+            origin={range.tMin}
+            tMax={range.tMax}
+            duration={windowDuration}
+            onScrub={applyViewport}
             onFocus={setFocusedId}
             onSplit={(id, dir) => {
               setFocusedId(id)
@@ -500,11 +434,12 @@ export default function App() {
                 return { ...prev, [id]: { ...tile, ...patch } }
               })
             }}
+            sources={session?.sources}
           />
         ) : (
           <div className="empty-workspace">
             <h2>No sources yet</h2>
-            <p>Add a camera, thermal camera, or microphone. Drag a tile header to swap or dock it; everyone shares this layout.</p>
+            <p>Add a camera, thermal camera, microphone, or Joulescope. Drag a tile header to swap or dock it; everyone shares this layout.</p>
             <button className="btn btn-primary" onClick={() => setModal('add')}>
               Add source
             </button>
@@ -514,22 +449,31 @@ export default function App() {
 
       <Timeline
         session={session}
-        live={live}
-        center={center}
-        duration={duration}
+        lockFront={lockFront}
+        lockBack={lockBack}
+        center={windowCenter}
+        duration={windowDuration}
         peers={peers}
         selfId={selfId}
-        onScrub={(nextCenter, nextDuration, nextLive) => {
-          if (playingRef.current && Math.abs(nextCenter - (center ?? nextCenter)) > 5_000_000) {
-            stopPlayback()
-          }
-          setLive(nextLive)
-          setCenter(Math.round(nextCenter))
-          setDuration(nextDuration)
-        }}
+        onScrub={applyViewport}
         onJumpToPeer={(peer) => {
-          stopPlayback()
-          setLive(peer.live)
+          const front = peer.lock_front !== false
+          const back = peer.lock_back !== false
+          if (range.tMin != null && range.tMax != null) {
+            applyViewport(
+              applyLocks(
+                peer.center ?? fitted.center,
+                peer.duration ?? fitted.duration,
+                range.tMin,
+                range.tMax,
+                front,
+                back,
+              ),
+            )
+            return
+          }
+          setLockFront(front)
+          setLockBack(back)
           if (peer.center != null) setCenter(peer.center)
           if (peer.duration != null) setDuration(peer.duration)
         }}
@@ -557,11 +501,7 @@ export default function App() {
           canSave={canSave}
           onOpened={(next) => {
             setSession(next)
-            setLive(false)
-            if (next.t_min != null && next.t_max != null) {
-              setCenter(Math.round((next.t_min + next.t_max) / 2))
-              setDuration(Math.min(DEFAULT_DURATION, Math.max(20_000_000, next.t_max - next.t_min)))
-            }
+            fitBothLocks()
           }}
           onClose={() => setModal(null)}
         />

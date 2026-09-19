@@ -4,8 +4,7 @@ import { fetchFrame, isLiveOffline, wsUrl } from '../api'
 type Props = {
   sourceId: string
   live: boolean
-  playing?: boolean
-  recording?: boolean
+  lockFront?: boolean
   center: number | null
   origin: number | null
 }
@@ -13,21 +12,16 @@ type Props = {
 export function CameraWidget({
   sourceId,
   live,
-  playing = false,
-  recording = false,
+  lockFront = false,
   center,
   origin,
 }: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const urlRef = useRef<string | null>(null)
   const centerRef = useRef(center)
-  const liveRef = useRef(live)
-  const recordingRef = useRef(recording)
   const [offline, setOffline] = useState(false)
   centerRef.current = center
-  liveRef.current = live
-  recordingRef.current = recording
-  const previewLive = live && !playing
+  const previewLive = live && lockFront
 
   const clearFrame = () => {
     if (imgRef.current) imgRef.current.removeAttribute('src')
@@ -75,13 +69,12 @@ export function CameraWidget({
       while (!stopped) {
         const t = centerRef.current
         const quantized = t == null ? null : Math.round(t / 33_000_000) * 33_000_000
-        const wantLatest = liveRef.current && recordingRef.current
-        if (quantized == null || (!wantLatest && quantized === lastDrawn)) {
+        if (quantized == null || quantized === lastDrawn) {
           await new Promise((resolve) => window.setTimeout(resolve, 16))
           continue
         }
         try {
-          const buffer = await fetchFrame(sourceId, wantLatest ? quantized + 1_000_000_000 : quantized)
+          const buffer = await fetchFrame(sourceId, quantized)
           if (stopped) return
           showBlob(buffer)
           lastDrawn = quantized
@@ -104,13 +97,11 @@ export function CameraWidget({
 
   const stamp = previewLive && offline
     ? 'OFFLINE'
-    : live
+    : previewLive
       ? 'LIVE'
-      : playing
-        ? `PLAY ${center != null ? ((center - (origin ?? center)) / 1e9).toFixed(3) : ''}s`
-        : center != null
-          ? `${((center - (origin ?? center)) / 1e9).toFixed(3)}s`
-          : ''
+      : center != null
+        ? `${((center - (origin ?? center)) / 1e9).toFixed(3)}s`
+        : ''
 
   return (
     <div className="tile-body">

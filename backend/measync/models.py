@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-Kind = Literal["camera", "audio", "thermal"]
+Kind = Literal["camera", "audio", "thermal", "joulescope"]
 
 
 class Device(BaseModel):
@@ -12,6 +12,7 @@ class Device(BaseModel):
     kind: Kind
     label: str
     index: int
+    sample_rates: list[int] | None = None
 
 
 class SourceInfo(BaseModel):
@@ -19,6 +20,8 @@ class SourceInfo(BaseModel):
     kind: Kind
     label: str
     sample_rate: int | None = None
+    sample_rates: list[int] | None = None
+    output_on: bool | None = None
     live: bool = True
     online: bool = True
 
@@ -27,6 +30,8 @@ class SessionStatus(BaseModel):
     recording: bool
     t_min: int | None
     t_max: int | None
+    live_t_min: int | None = None
+    live_t_max: int | None = None
     bytes_used: int
     bytes_cap: int
     dirty: bool
@@ -35,6 +40,14 @@ class SessionStatus(BaseModel):
 
 class CapUpdate(BaseModel):
     bytes_cap: int = Field(ge=1_000_000, le=64_000_000_000)
+
+
+class RateUpdate(BaseModel):
+    sample_rate: int = Field(ge=1, le=2_000_000)
+
+
+class PortsUpdate(BaseModel):
+    output_on: bool
 
 
 class ProfilePayload(BaseModel):

@@ -15,6 +15,7 @@ const CATEGORIES: { kind: Kind; title: string }[] = [
   { kind: 'camera', title: 'Webcam' },
   { kind: 'thermal', title: 'Thermal camera' },
   { kind: 'audio', title: 'Audio' },
+  { kind: 'joulescope', title: 'Joulescope' },
 ]
 
 function grouped(items: Pickable[]) {
@@ -93,7 +94,7 @@ export function AddSourceModal({ tracks, onPick, onClose }: Props) {
     <Modal title="Add source" onClose={onClose}>
       {error && <p className="error">{error}</p>}
       {devices.length === 0 ? (
-        <p className="device-empty">No cameras, thermal cameras, or microphones found.</p>
+        <p className="device-empty">No cameras, thermal cameras, microphones, or Joulescopes found.</p>
       ) : (
         <DeviceGroups items={devices} liveDevice onPick={onPick} />
       )}

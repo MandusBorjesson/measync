@@ -28,18 +28,24 @@ import {
   zoneExtrema,
   zoneLineId,
 } from '../thermal'
+import { queryWindow, type Viewport } from '../viewport'
 import { ThermalGraph } from './ThermalGraph'
 
 type Props = {
   sourceId: string
   live: boolean
-  playing?: boolean
+  lockFront?: boolean
+  lockBack?: boolean
   hasCapture?: boolean
   recording?: boolean
   center: number | null
   origin: number | null
   t0: number | null
   t1: number | null
+  duration?: number
+  rangeMin?: number | null
+  rangeMax?: number | null
+  onScrub?: (next: Viewport) => void
   zones?: ThermalZone[]
   splitRatio?: number
   onZonesChange?: (zones: ThermalZone[]) => void
@@ -65,42 +71,21 @@ function sameSpot(stats: ThermalStats) {
   )
 }
 
-function appendLivePoint(
-  prev: ThermalSeries,
-  t: number,
-  stats: ThermalStats,
-  zoneStats: (ZoneStats | null)[],
-): ThermalSeries {
-  const next: ThermalSeries = {
-    t: [...prev.t, t],
-    min: [...prev.min, stats.minC ?? 0],
-    max: [...prev.max, stats.maxC ?? 0],
-    center: [...prev.center, stats.centerC ?? 0],
-    zones: zoneStats.map((z, i) => ({
-      min: [...(prev.zones[i]?.min ?? []), z?.minC ?? null],
-      max: [...(prev.zones[i]?.max ?? []), z?.maxC ?? null],
-    })),
-  }
-  if (next.t.length <= 240) return next
-  return {
-    t: next.t.slice(-240),
-    min: next.min.slice(-240),
-    max: next.max.slice(-240),
-    center: next.center.slice(-240),
-    zones: next.zones.map((z) => ({ min: z.min.slice(-240), max: z.max.slice(-240) })),
-  }
-}
-
 export function ThermalWidget({
   sourceId,
   live,
-  playing = false,
-  hasCapture = false,
-  recording = false,
+  lockFront = false,
+  lockBack = false,
+  hasCapture: _hasCapture = false,
+  recording: _recording = false,
   center,
   origin,
   t0,
   t1,
+  duration,
+  rangeMin,
+  rangeMax,
+  onScrub,
   zones = [],
   splitRatio = DEFAULT_SPLIT,
   onZonesChange,
@@ -113,10 +98,8 @@ export function ThermalWidget({
   const urlRef = useRef<string | null>(null)
   const centerRef = useRef(center)
   const liveRef = useRef(live)
-  const recordingRef = useRef(recording)
-  const rangeRef = useRef({ t0, t1 })
+  const rangeRef = useRef({ t0, t1, live })
   const zonesRef = useRef(zones)
-  const followStreamRef = useRef(false)
   const genRef = useRef(0)
   const [offline, setOffline] = useState(false)
   const [stats, setStats] = useState<ThermalStats>(EMPTY_STATS)
@@ -131,12 +114,9 @@ export function ThermalWidget({
   const ratio = Math.min(0.82, Math.max(0.28, splitRatio))
   centerRef.current = center
   liveRef.current = live
-  recordingRef.current = recording
-  rangeRef.current = { t0, t1 }
+  rangeRef.current = { t0, t1, live }
   zonesRef.current = zones
-  const previewLive = live && !playing
-  const followStream = previewLive && !hasCapture
-  followStreamRef.current = followStream
+  const previewLive = live && lockFront
   const zoneGeomKey = encodeZoneQuery(zones)
 
   const relayout = useCallback(() => {
@@ -155,10 +135,9 @@ export function ThermalWidget({
     setStats(EMPTY_STATS)
     setTempMap(null)
     setBox(null)
-    if (followStreamRef.current) setSeries(EMPTY_SERIES)
   }
 
-  const showPayload = (buffer: ArrayBuffer, tNs?: number) => {
+  const showPayload = (buffer: ArrayBuffer, _tNs?: number) => {
     const my = ++genRef.current
     const parsed = parseThermalSnapshot(buffer)
     setStats(parsed.stats)
@@ -168,18 +147,11 @@ export function ThermalWidget({
     urlRef.current = next
     if (!parsed.tempBytes) {
       setTempMap(null)
-      if (followStreamRef.current) {
-        setSeries((prev) => appendLivePoint(prev, tNs ?? performance.now() * 1e6, parsed.stats, []))
-      }
       return
     }
     void decodeTempMap(parsed.tempBytes).then((temp) => {
       if (my !== genRef.current) return
       setTempMap(temp)
-      if (followStreamRef.current) {
-        const zStats = temp ? zonesRef.current.map((z) => zoneExtrema(temp, z)) : []
-        setSeries((prev) => appendLivePoint(prev, tNs ?? performance.now() * 1e6, parsed.stats, zStats))
-      }
     })
   }
 
@@ -214,10 +186,6 @@ export function ThermalWidget({
   }, [sourceId, previewLive])
 
   useEffect(() => {
-    if (followStream) setSeries(EMPTY_SERIES)
-  }, [followStream, sourceId, zoneGeomKey])
-
-  useEffect(() => {
     if (previewLive) return
     let stopped = false
     let lastDrawn = Number.NaN
@@ -226,13 +194,12 @@ export function ThermalWidget({
       while (!stopped) {
         const t = centerRef.current
         const quantized = t == null ? null : Math.round(t / 33_000_000) * 33_000_000
-        const wantLatest = liveRef.current && recordingRef.current
-        if (quantized == null || (!wantLatest && quantized === lastDrawn)) {
+        if (quantized == null || quantized === lastDrawn) {
           await new Promise((resolve) => window.setTimeout(resolve, 16))
           continue
         }
         try {
-          const buffer = await fetchThermalFrame(sourceId, wantLatest ? quantized + 1_000_000_000 : quantized)
+          const buffer = await fetchThermalFrame(sourceId, quantized)
           if (stopped) return
           await showPayload(buffer, quantized)
           lastDrawn = quantized
@@ -248,22 +215,31 @@ export function ThermalWidget({
   }, [sourceId, previewLive])
 
   useEffect(() => {
-    if (followStream || !showGraph) return
+    if (!showGraph) return
+    setSeries(EMPTY_SERIES)
     let stopped = false
     let lastKey = ''
+    let lastFetch = 0
 
     const pump = async () => {
       while (!stopped) {
-        const rawStart = rangeRef.current.t0
-        const rawStop = rangeRef.current.t1
-        const span = rawStart != null && rawStop != null ? rawStop - rawStart : 0
-        const quant = Math.max(20_000_000, span > 0 ? Math.round(span / 60) : 20_000_000)
-        const tStart = rawStart == null ? null : Math.round(rawStart / quant) * quant
-        const tStop = rawStop == null ? null : Math.round(rawStop / quant) * quant
+        const { t0: rawStart, t1: rawStop, live: isLive } = rangeRef.current
+        const win = queryWindow(rawStart, rawStop)
+        const tStart = win?.t0 ?? null
+        const tStop = win?.t1 ?? null
         const zoned = zonesRef.current.length > 0
         const key = `${tStart}:${tStop}:${encodeZoneQuery(zonesRef.current)}`
-        if (tStart == null || tStop == null || key === lastKey) {
+        const now = performance.now()
+        if (tStart == null || tStop == null) {
           await new Promise((resolve) => window.setTimeout(resolve, zoned ? 50 : 16))
+          continue
+        }
+        if (!isLive && key === lastKey) {
+          await new Promise((resolve) => window.setTimeout(resolve, zoned ? 50 : 16))
+          continue
+        }
+        if (isLive && key === lastKey && now - lastFetch < 50) {
+          await new Promise((resolve) => window.setTimeout(resolve, 16))
           continue
         }
         try {
@@ -271,6 +247,7 @@ export function ThermalWidget({
           if (stopped) return
           setSeries(next)
           lastKey = key
+          lastFetch = now
           if (zoned) await new Promise((resolve) => window.setTimeout(resolve, 80))
         } catch {
           await new Promise((resolve) => window.setTimeout(resolve, 40))
@@ -281,7 +258,7 @@ export function ThermalWidget({
     return () => {
       stopped = true
     }
-  }, [sourceId, followStream, zoneGeomKey, showGraph])
+  }, [sourceId, zoneGeomKey, showGraph])
 
   useEffect(() => {
     return () => {
@@ -428,13 +405,11 @@ export function ThermalWidget({
 
   const stamp = previewLive && offline
     ? 'OFFLINE'
-    : live
+    : previewLive
       ? 'LIVE'
-      : playing
-        ? `PLAY ${center != null ? ((center - (origin ?? center)) / 1e9).toFixed(3) : ''}s`
-        : center != null
-          ? `${((center - (origin ?? center)) / 1e9).toFixed(3)}s`
-          : ''
+      : center != null
+        ? `${((center - (origin ?? center)) / 1e9).toFixed(3)}s`
+        : ''
 
   const overlayZones: Array<ThermalZone & { draft?: boolean }> = draft
     ? [...zones, { id: 'draft', name: 'new', x: draft.x, y: draft.y, w: draft.w, h: draft.h, draft: true }]
@@ -594,11 +569,16 @@ export function ThermalWidget({
             <ThermalGraph
               series={series}
               zones={zones}
-              t0={followStream ? null : t0}
-              t1={followStream ? null : t1}
+              t0={t0}
+              t1={t1}
               center={center}
-              live={followStream || live}
-              playing={playing}
+              live={live}
+              lockFront={lockFront}
+              lockBack={lockBack}
+              duration={duration}
+              rangeMin={rangeMin}
+              rangeMax={rangeMax}
+              onScrub={onScrub}
               hidden={hidden}
               onToggle={toggleLine}
             />

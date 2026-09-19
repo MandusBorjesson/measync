@@ -1,4 +1,4 @@
-import type { Device, Profile, SavedCapture, SessionStatus, ThermalSeries, Waveform } from './types'
+import type { Device, JoulescopeSeries, Profile, SavedCapture, SessionStatus, ThermalSeries, Waveform } from './types'
 
 async function parseError(res: Response): Promise<string> {
   try {
@@ -30,6 +30,10 @@ export async function startRecording(): Promise<SessionStatus> {
 
 export async function stopRecording(): Promise<SessionStatus> {
   return json<SessionStatus>(await fetch('/api/session/stop', { method: 'POST' }))
+}
+
+export async function resetSession(): Promise<SessionStatus> {
+  return json<SessionStatus>(await fetch('/api/session/reset', { method: 'POST' }))
 }
 
 export async function setCap(bytes_cap: number): Promise<SessionStatus> {
@@ -69,6 +73,33 @@ export async function fetchWaveform(sourceId: string, t0: number, t1: number): P
   const q = new URLSearchParams({ t0: String(Math.round(t0)), t1: String(Math.round(t1)) })
   return json<Waveform>(
     await fetch(`/api/session/audio/${encodeURIComponent(sourceId)}/waveform?${q}`),
+  )
+}
+
+export async function fetchJoulescopeSeries(sourceId: string, t0: number, t1: number): Promise<JoulescopeSeries> {
+  const q = new URLSearchParams({ t0: String(Math.round(t0)), t1: String(Math.round(t1)) })
+  return json<JoulescopeSeries>(
+    await fetch(`/api/session/joulescope/${encodeURIComponent(sourceId)}/series?${q}`),
+  )
+}
+
+export async function setSourceRate(sourceId: string, sample_rate: number): Promise<void> {
+  await json(
+    await fetch(`/api/sources/${encodeURIComponent(sourceId)}/rate`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sample_rate }),
+    }),
+  )
+}
+
+export async function setSourceOutput(sourceId: string, output_on: boolean): Promise<void> {
+  await json(
+    await fetch(`/api/sources/${encodeURIComponent(sourceId)}/ports`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ output_on }),
+    }),
   )
 }
 

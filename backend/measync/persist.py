@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from measync.profiles import safe_name
-from measync.ring import AudioTrack, CamTrack, RingBuffer
+from measync.ring import AudioTrack, CamTrack, JoulescopeTrack, RingBuffer
 
 
 def list_captures(root: Path) -> list[dict]:
@@ -42,7 +42,7 @@ def save_capture(ring: RingBuffer, dest_root: Path, name: str) -> dict:
         raise FileExistsError(name)
     dest.mkdir(parents=True)
 
-    cameras, audios = ring.copy_tracks()
+    cameras, audios, scopes, _used = ring.copy_tracks()
     t_min, t_max, used, cap = ring.snapshot_status()
     sources: list[dict] = []
 
@@ -88,6 +88,40 @@ def save_capture(ring: RingBuffer, dest_root: Path, name: str) -> dict:
             }
         )
 
+    for sid, track in scopes.items():
+        if not len(track):
+            continue
+        folder = _source_dir(dest, sid)
+        folder.mkdir()
+        ts = np.array(track.t[track.start :], dtype=np.int64)
+        rates = np.array(track.rates[track.start :], dtype=np.int32)
+        lengths = np.array([len(c) for c in track.current[track.start :]], dtype=np.int32)
+        current = (
+            np.concatenate(track.current[track.start :]) if lengths.size else np.zeros(0, dtype=np.float32)
+        )
+        voltage = (
+            np.concatenate(track.voltage[track.start :]) if lengths.size else np.zeros(0, dtype=np.float32)
+        )
+        power = np.concatenate(track.power[track.start :]) if lengths.size else np.zeros(0, dtype=np.float32)
+        np.savez(
+            folder / "series.npz",
+            t=ts,
+            rates=rates,
+            lengths=lengths,
+            current=current,
+            voltage=voltage,
+            power=power,
+            sample_rate=np.int32(track.sample_rate),
+        )
+        sources.append(
+            {
+                "id": sid,
+                "kind": "joulescope",
+                "label": track.label,
+                "sample_rate": track.sample_rate,
+            }
+        )
+
     meta = {
         "name": safe_name(name),
         "t_min": t_min,
@@ -108,6 +142,7 @@ def load_capture(ring: RingBuffer, dest_root: Path, name: str) -> dict:
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     cameras: dict[str, CamTrack] = {}
     audios: dict[str, AudioTrack] = {}
+    scopes: dict[str, JoulescopeTrack] = {}
     used = 0
 
     for src in meta.get("sources", []):
@@ -138,10 +173,32 @@ def load_capture(ring: RingBuffer, dest_root: Path, name: str) -> dict:
                 cursor += int(length)
                 used += track.append(int(t_ns), chunk)
             audios[sid] = track
+        elif kind == "joulescope":
+            data = np.load(folder / "series.npz")
+            rate = int(data["sample_rate"])
+            track = JoulescopeTrack(label=src.get("label") or sid, sample_rate=rate)
+            current = data["current"]
+            voltage = data["voltage"]
+            power = data["power"]
+            lengths = data["lengths"]
+            ts = data["t"]
+            rates = data["rates"] if "rates" in data.files else np.full(len(ts), rate, dtype=np.int32)
+            cursor = 0
+            for t_ns, length, chunk_rate in zip(ts.tolist(), lengths.tolist(), rates.tolist(), strict=True):
+                n = int(length)
+                used += track.append(
+                    int(t_ns),
+                    np.ascontiguousarray(current[cursor : cursor + n], dtype=np.float32),
+                    np.ascontiguousarray(voltage[cursor : cursor + n], dtype=np.float32),
+                    np.ascontiguousarray(power[cursor : cursor + n], dtype=np.float32),
+                    int(chunk_rate),
+                )
+                cursor += n
+            scopes[sid] = track
 
     if used > ring.cap_bytes:
         raise MemoryError(
             f"capture is {used} bytes, larger than the {ring.cap_bytes} byte cap; raise the cap and retry"
         )
-    ring.replace_from(cameras, audios, used)
+    ring.replace_from(cameras, audios, used, scopes)
     return meta

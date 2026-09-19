@@ -11,7 +11,7 @@ from fastapi.responses import Response
 
 from measync import devices as device_mod
 from measync import persist
-from measync.models import CaptureName, CapUpdate, ProfilePayload
+from measync.models import CaptureName, CapUpdate, PortsUpdate, ProfilePayload, RateUpdate
 from measync.session import Session
 
 log = logging.getLogger("measync")
@@ -65,10 +65,13 @@ def list_devices() -> dict:
 def get_session() -> dict:
     s = session()
     t_min, t_max, used, cap = s.ring.snapshot_status()
+    live_t_min, live_t_max = s.live_ring.range_ns()
     return {
         "recording": s.recording,
         "t_min": t_min,
         "t_max": t_max,
+        "live_t_min": live_t_min,
+        "live_t_max": live_t_max,
         "bytes_used": used,
         "bytes_cap": cap,
         "dirty": s.dirty,
@@ -94,10 +97,16 @@ def stop_recording() -> dict:
     return get_session()
 
 
+@app.post("/api/session/reset")
+def reset_session() -> dict:
+    session().reset()
+    return get_session()
+
+
 def _resolve_device(source_id: str):
     kind, _, raw_index = source_id.partition(":")
-    if kind not in {"camera", "audio", "thermal"} or not raw_index.isdigit():
-        raise HTTPException(400, "source id must be camera:<n>, audio:<n>, or thermal:<n>")
+    if kind not in {"camera", "audio", "thermal", "joulescope"} or not raw_index.isdigit():
+        raise HTTPException(400, "source id must be camera:<n>, audio:<n>, thermal:<n>, or joulescope:<n>")
     index = int(raw_index)
     if kind == "camera":
         from pathlib import Path
@@ -119,6 +128,11 @@ def _resolve_device(source_id: str):
         if not Path(f"/dev/video{index}").exists() or not is_thermal_capture(index):
             raise HTTPException(404, f"device {source_id} not found")
         return kind, index, thermal_label(index)
+    if kind == "joulescope":
+        match = next((d for d in device_mod.list_joulescopes() if d.id == source_id), None)
+        if match is None:
+            raise HTTPException(404, f"device {source_id} not found")
+        return kind, index, match.label
     match = next((d for d in device_mod.list_mics() if d.id == source_id), None)
     if match is None:
         raise HTTPException(404, f"device {source_id} not found")
@@ -139,9 +153,41 @@ def drop_source(source_id: str) -> dict:
     return {"ok": True}
 
 
+@app.put("/api/sources/{source_id:path}/rate")
+def set_source_rate(source_id: str, body: RateUpdate) -> dict:
+    try:
+        handle = session().set_source_rate(source_id, body.sample_rate)
+    except KeyError:
+        raise HTTPException(404, f"source {source_id} not found") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "id": handle.source_id,
+        "kind": handle.kind,
+        "sample_rate": handle.sample_rate,
+        "sample_rates": handle.sample_rates,
+    }
+
+
+@app.put("/api/sources/{source_id:path}/ports")
+def set_source_ports(source_id: str, body: PortsUpdate) -> dict:
+    try:
+        handle = session().set_source_output(source_id, body.output_on)
+    except KeyError:
+        raise HTTPException(404, f"source {source_id} not found") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "id": handle.source_id,
+        "kind": handle.kind,
+        "output_on": handle.output_on,
+    }
+
+
 @app.get("/api/session/camera/{source_id:path}/frame")
 def camera_frame(source_id: str, t: float) -> Response:
-    jpeg = session().ring.camera_frame(source_id, int(round(t)))
+    t_ns = int(round(t))
+    jpeg = session().query_ring(t_ns).camera_frame(source_id, t_ns)
     if jpeg is None:
         raise HTTPException(404, "no frame")
     return Response(content=jpeg, media_type="image/jpeg")
@@ -149,7 +195,8 @@ def camera_frame(source_id: str, t: float) -> Response:
 
 @app.get("/api/session/thermal/{source_id:path}/frame")
 def thermal_frame(source_id: str, t: float) -> Response:
-    payload = session().ring.camera_frame(source_id, int(round(t)))
+    t_ns = int(round(t))
+    payload = session().query_ring(t_ns).camera_frame(source_id, t_ns)
     if payload is None:
         raise HTTPException(404, "no frame")
     return Response(content=payload, media_type="application/octet-stream")
@@ -157,7 +204,8 @@ def thermal_frame(source_id: str, t: float) -> Response:
 
 @app.get("/api/session/audio/{source_id:path}/pcm")
 def audio_pcm(source_id: str, t0: float, t1: float) -> Response:
-    result = session().ring.audio_pcm(source_id, int(round(t0)), int(round(t1)))
+    start, stop = int(round(t0)), int(round(t1))
+    result = session().query_ring(start, stop).audio_pcm(source_id, start, stop)
     if result is None:
         raise HTTPException(404, "no audio")
     rate, samples = result
@@ -170,7 +218,8 @@ def audio_pcm(source_id: str, t0: float, t1: float) -> Response:
 
 @app.get("/api/session/audio/{source_id:path}/waveform")
 def audio_waveform(source_id: str, t0: float, t1: float) -> dict:
-    env = session().ring.audio_envelope(source_id, int(round(t0)), int(round(t1)))
+    start, stop = int(round(t0)), int(round(t1))
+    env = session().query_ring(start, stop).audio_envelope(source_id, start, stop)
     if env is None:
         raise HTTPException(404, "no audio")
     return env
@@ -180,11 +229,21 @@ def audio_waveform(source_id: str, t0: float, t1: float) -> dict:
 def thermal_series(source_id: str, t0: float, t1: float, zones: str | None = None) -> dict:
     from measync.thermal import parse_zone_rects
 
-    series = session().ring.thermal_series(
-        source_id, int(round(t0)), int(round(t1)), parse_zone_rects(zones)
+    start, stop = int(round(t0)), int(round(t1))
+    series = session().query_ring(start, stop).thermal_series(
+        source_id, start, stop, parse_zone_rects(zones)
     )
     if series is None:
         raise HTTPException(404, "no thermal")
+    return series
+
+
+@app.get("/api/session/joulescope/{source_id:path}/series")
+def joulescope_series(source_id: str, t0: float, t1: float) -> dict:
+    start, stop = int(round(t0)), int(round(t1))
+    series = session().query_ring(start, stop).joulescope_series(source_id, start, stop)
+    if series is None:
+        raise HTTPException(404, "no joulescope")
     return series
 
 
@@ -308,10 +367,10 @@ async def presence_ws(ws: WebSocket) -> None:
                 if msg.get("type") == "viewport":
                     await s.presence.update_viewport(
                         peer.id,
-                        bool(msg.get("live", True)),
+                        bool(msg.get("lock_front", True)),
+                        bool(msg.get("lock_back", True)),
                         msg.get("center"),
                         msg.get("duration"),
-                        bool(msg.get("playing", False)),
                     )
                 elif msg.get("type") == "layout":
                     await s.presence.set_layout(msg, origin=peer.id)

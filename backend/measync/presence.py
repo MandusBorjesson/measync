@@ -15,8 +15,8 @@ class Peer:
     id: str
     name: str
     color: str
-    live: bool = True
-    playing: bool = False
+    lock_front: bool = True
+    lock_back: bool = True
     center: int | None = None
     duration: int | None = None
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=32))
@@ -26,8 +26,8 @@ class Peer:
             "id": self.id,
             "name": self.name,
             "color": self.color,
-            "live": self.live,
-            "playing": self.playing,
+            "lock_front": self.lock_front,
+            "lock_back": self.lock_back,
             "center": self.center,
             "duration": self.duration,
         }
@@ -60,17 +60,17 @@ class PresenceHub:
     async def update_viewport(
         self,
         peer_id: str,
-        live: bool,
+        lock_front: bool,
+        lock_back: bool,
         center: int | None,
         duration: int | None,
-        playing: bool = False,
     ) -> None:
         async with self._lock:
             peer = self._peers.get(peer_id)
             if peer is None:
                 return
-            peer.live = live
-            peer.playing = playing
+            peer.lock_front = lock_front
+            peer.lock_back = lock_back
             peer.center = int(center) if center is not None else None
             peer.duration = int(duration) if duration is not None else None
             snapshot = self.list_public()

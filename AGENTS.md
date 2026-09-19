@@ -6,30 +6,31 @@ This repository has a documented architecture. Treat it as binding, not backgrou
 
 ## What this is
 
-Lab workbench: tiled live sources, one shared RAM capture ring, independent timeline per viewer. One backend process owns hardware and the ring; browsers are viewers of that single session. No auth, no multi-room.
+Lab workbench: tiled live sources, a short ~5 s preview ring plus one RAM capture ring, independent timeline per viewer. One backend process owns hardware and the rings; browsers are viewers of that single session. No auth, no multi-room.
 
 ## Widget families (required)
 
 Widgets are built from two playback models. Most tiles use one; hybrid tiles compose both. Do not add a third scrub/playback model.
 
 - **Real-time** (cameras today; text logs later) — closest **snapshot** to the selected timestamp (window centre).
-- **Graph** (audio today; current/voltage later) — render the **selected window**, centered on that timestamp.
+- **Graph** (audio and Joulescope today) — render the **selected window**, centered on that timestamp. Zoomed in, those are the real samples; condensed windows are a mean line plus a min/max band.
 - **Hybrid** (Infiray thermals today) — snapshot on top, selected-window graph below. Same two query types, one tile.
 
-Live preview still uses `/ws/live/{source_id}`. Scrub/playback uses HTTP ring queries (point query vs range query).
+Live camera/thermal **images** still use `/ws/live/{source_id}` while the buffer is growing and lock front is on. Graph tiles always render the selected window via HTTP range queries. Wheel-zoom / drag-pan on graphs and the timeline share [`frontend/src/viewport.ts`](frontend/src/viewport.ts) (lock front / lock back).
 
 ## Boundaries
 
 - [`backend/measync/main.py`](backend/measync/main.py) — HTTP/WebSocket routes only.
-- [`backend/measync/session.py`](backend/measync/session.py) — orchestrates recording, sources, `dirty`.
-- [`backend/measync/capture.py`](backend/measync/capture.py) — daemon threads; live-publish while the device is open; retry after disconnect; append to the ring only while recording.
-- [`backend/measync/ring.py`](backend/measync/ring.py) — time-aligned global eviction; monotonic nanoseconds.
+- [`backend/measync/session.py`](backend/measync/session.py) — orchestrates recording, sources, `dirty`, capture `ring` and preview `live_ring`.
+- [`backend/measync/capture.py`](backend/measync/capture.py) — daemon threads; live-publish while the device is open; retry after disconnect; `store_*` routes samples to preview or capture.
+- [`backend/measync/ring.py`](backend/measync/ring.py) — time-aligned global eviction; optional `keep_ns` for the live ring; monotonic nanoseconds.
 - [`frontend/src/layout.ts`](frontend/src/layout.ts) — mosaic tree math; do not fork a second layout model.
+- [`frontend/src/viewport.ts`](frontend/src/viewport.ts) — viewer window math (lock/zoom/pan); do not fork a second scrub model.
 - [`backend/measync/models.py`](backend/measync/models.py) and [`frontend/src/types.ts`](frontend/src/types.ts) stay aligned.
 
 ## Invariants (short)
 
-One session, one monotonic-ns time base, one global byte cap with **time-aligned** eviction. Record **clears** the ring. No save/open while recording. Source IDs `{kind}:{index}` (`camera:0`, `thermal:2`, `audio:1` today). Layout last-write-wins on the presence hub.
+One session, one monotonic-ns time base, one global byte cap with **time-aligned** eviction on the capture ring, a ~5 s time-capped `live_ring` in preview. Record copies the live ring when the capture is empty, otherwise resumes. Stop writes neither ring. Reset clears RAM and returns to preview. No save/open while recording. Source IDs `{kind}:{index}` (`camera:0`, `thermal:2`, `audio:1`, `joulescope:0` today). Layout last-write-wins on the presence hub.
 
 Details and API tables: [docs/architecture.md](docs/architecture.md).
 

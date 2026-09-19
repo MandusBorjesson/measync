@@ -108,5 +108,11 @@ def list_mics() -> list[Device]:
     return found
 
 
+def list_joulescopes() -> list[Device]:
+    from measync.joulescope import list_joulescopes as _list
+
+    return _list()
+
+
 def list_devices(busy_cameras: set[int] | None = None) -> list[Device]:
-    return [*list_thermals(), *list_cameras(busy=busy_cameras), *list_mics()]
+    return [*list_thermals(), *list_cameras(busy=busy_cameras), *list_mics(), *list_joulescopes()]

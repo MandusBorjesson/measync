@@ -1,4 +1,5 @@
 import type { ThermalSeries, ThermalZone } from './types'
+import { emptyBand } from './graph'
 
 export type { ThermalSeries, ThermalZone }
 
@@ -52,7 +53,14 @@ export const EMPTY_STATS: ThermalStats = {
   maxY: null,
 }
 
-export const EMPTY_SERIES: ThermalSeries = { t: [], min: [], max: [], center: [], zones: [] }
+export const EMPTY_SERIES: ThermalSeries = {
+  t: [],
+  min: emptyBand(),
+  max: emptyBand(),
+  center: emptyBand(),
+  zones: [],
+  raw: false,
+}
 
 export type FrameBox = { left: number; top: number; width: number; height: number }
 

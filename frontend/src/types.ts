@@ -1,11 +1,13 @@
-export type Kind = 'camera' | 'audio' | 'thermal'
+export type Kind = 'camera' | 'audio' | 'thermal' | 'joulescope'
 export type SplitDir = 'h' | 'v'
+export type JoulescopeChannel = 'current' | 'voltage' | 'power'
 
 export type Device = {
   id: string
   kind: Kind
   label: string
   index: number
+  sample_rates?: number[] | null
 }
 
 export type SourceInfo = {
@@ -13,6 +15,8 @@ export type SourceInfo = {
   kind: Kind
   label: string
   sample_rate: number | null
+  sample_rates?: number[] | null
+  output_on?: boolean | null
   live: boolean
   online?: boolean
 }
@@ -21,6 +25,8 @@ export type SessionStatus = {
   recording: boolean
   t_min: number | null
   t_max: number | null
+  live_t_min?: number | null
+  live_t_max?: number | null
   bytes_used: number
   bytes_cap: number
   dirty: boolean
@@ -44,6 +50,7 @@ export type TileSpec = {
   zones?: ThermalZone[]
   splitRatio?: number
   showGraph?: boolean
+  channels?: JoulescopeChannel[]
 }
 
 export type Layout =
@@ -54,8 +61,8 @@ export type Peer = {
   id: string
   name: string
   color: string
-  live: boolean
-  playing?: boolean
+  lock_front?: boolean
+  lock_back?: boolean
   center: number | null
   duration: number | null
 }
@@ -76,17 +83,35 @@ export type SavedCapture = {
   sources: { id: string; kind: Kind; label: string }[]
 }
 
+export type BandSeries = {
+  mean: (number | null)[]
+  min: (number | null)[]
+  max: (number | null)[]
+}
+
 export type Waveform = {
   t: number[]
+  mean: number[]
   min: number[]
   max: number[]
   sample_rate: number
+  raw?: boolean
 }
 
 export type ThermalSeries = {
   t: number[]
-  min: number[]
-  max: number[]
-  center: number[]
-  zones: { min: (number | null)[]; max: (number | null)[] }[]
+  min: BandSeries
+  max: BandSeries
+  center: BandSeries
+  zones: { min: BandSeries; max: BandSeries }[]
+  raw?: boolean
+}
+
+export type JoulescopeSeries = {
+  t: number[]
+  current: BandSeries
+  voltage: BandSeries
+  power: BandSeries
+  sample_rate?: number
+  raw?: boolean
 }

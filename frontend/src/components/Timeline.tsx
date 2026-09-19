@@ -1,24 +1,23 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import type { Peer, SessionStatus } from '../types'
+import { applySeek, applyWheelZoom, clamp, playhead, viewRange, visibleRange, type Viewport } from '../viewport'
 
 type Props = {
   session: SessionStatus | null
-  live: boolean
+  lockFront: boolean
+  lockBack: boolean
   center: number | null
   duration: number
   peers: Peer[]
   selfId: string | null
-  onScrub: (center: number, duration: number, live: boolean) => void
+  onScrub: (next: Viewport) => void
   onJumpToPeer: (peer: Peer) => void
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value))
 }
 
 export function Timeline({
   session,
-  live,
+  lockFront,
+  lockBack,
   center,
   duration,
   peers,
@@ -28,29 +27,34 @@ export function Timeline({
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
-  const scrubRef = useRef({ live, center, duration, tMin: session?.t_min ?? null, tMax: session?.t_max ?? null })
-  scrubRef.current = { live, center, duration, tMin: session?.t_min ?? null, tMax: session?.t_max ?? null }
+  const range = viewRange(session)
+  const scrubRef = useRef({
+    lockFront,
+    lockBack,
+    center,
+    duration,
+    tMin: range.tMin,
+    tMax: range.tMax,
+  })
+  scrubRef.current = { lockFront, lockBack, center, duration, tMin: range.tMin, tMax: range.tMax }
 
-  const tMin = session?.t_min ?? null
-  const tMax = session?.t_max ?? null
+  const tMin = range.tMin
+  const tMax = range.tMax
   const hasRange = tMin != null && tMax != null && tMax >= tMin
   const span = hasRange ? Math.max(1, tMax - tMin) : 1
-  const windowCenter = live && tMax != null ? tMax : center ?? tMax
-  const leftNs = windowCenter != null ? windowCenter - duration / 2 : null
-  const rightNs = windowCenter != null ? windowCenter + duration / 2 : null
+  const windowCenter = playhead(lockFront, lockBack, center, tMin, tMax)
+  const win =
+    windowCenter != null && tMin != null && tMax != null
+      ? visibleRange(windowCenter, duration, tMin, tMax)
+      : null
+  const leftNs = win?.t0 ?? (windowCenter != null ? windowCenter - duration / 2 : null)
+  const rightNs = win?.t1 ?? (windowCenter != null ? windowCenter + duration / 2 : null)
+  const bothLocks = lockFront && lockBack
+  const status = bothLocks ? 'FULL' : lockFront ? 'FRONT' : lockBack ? 'BACK' : 'SCRUB'
 
   const xOf = (t: number) => {
     if (!hasRange || tMin == null) return 0
     return ((t - tMin) / span) * 100
-  }
-
-  const timeAt = (clientX: number) => {
-    const el = trackRef.current
-    const { tMin: min, tMax: max } = scrubRef.current
-    if (!el || min == null || max == null) return 0
-    const rect = el.getBoundingClientRect()
-    const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1)
-    return min + ratio * Math.max(1, max - min)
   }
 
   useEffect(() => {
@@ -60,13 +64,9 @@ export function Timeline({
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       event.stopPropagation()
-      const { tMin: min, tMax: max, duration: dur, live: isLive, center: cur } = scrubRef.current
+      const { tMin: min, tMax: max, duration: dur, lockFront: front, lockBack: back, center: cur } = scrubRef.current
       if (min == null || max == null) return
-      const range = Math.max(1, max - min)
-      const playhead = isLive ? max : (cur ?? max)
-      const factor = Math.exp(event.deltaY * 0.002)
-      const next = clamp(dur * factor, 20_000_000, range)
-      onScrub(playhead, next, isLive)
+      onScrub(applyWheelZoom(dur, event.deltaY, min, max, front, back, cur))
     }
 
     root.addEventListener('wheel', onWheel, { passive: false })
@@ -81,9 +81,10 @@ export function Timeline({
     const track = trackRef.current
     track?.setPointerCapture(event.pointerId)
     const apply = (clientX: number) => {
+      const el = trackRef.current
       const { tMin: a, tMax: b, duration: d } = scrubRef.current
-      if (a == null || b == null) return
-      onScrub(clamp(timeAt(clientX), a, b), d, false)
+      if (!el || a == null || b == null) return
+      onScrub(applySeek(clientX, el.getBoundingClientRect(), a, b, d))
     }
     apply(event.clientX)
 
@@ -97,16 +98,25 @@ export function Timeline({
     window.addEventListener('pointerup', up)
   }
 
+  const peerLockLabel = (peer: Peer) => {
+    const front = peer.lock_front !== false
+    const back = peer.lock_back !== false
+    if (front && back) return ' · full'
+    if (front) return ' · front'
+    if (back) return ' · back'
+    return ''
+  }
+
   return (
     <div className="timeline" ref={rootRef}>
       <div className="timeline-meta">
-        <span>{live ? 'LIVE' : 'SCRUB'} · window {formatDuration(duration)}</span>
+        <span>{status} · window {formatDuration(duration)}</span>
         <span>
           {hasRange && tMin != null && tMax != null
             ? `${formatOffset(tMin, tMin)} — ${formatOffset(tMax, tMin)}`
             : session?.recording
               ? 'recording… waiting for samples'
-              : 'no capture in memory'}
+              : 'no samples in memory'}
         </span>
       </div>
       <div className="timeline-track" ref={trackRef} onPointerDown={onPointerDown}>
@@ -119,7 +129,7 @@ export function Timeline({
             }}
           />
         )}
-        {hasRange && tMin != null && windowCenter != null && (
+        {hasRange && tMin != null && windowCenter != null && !bothLocks && (
           <div className="playhead" style={{ left: `${xOf(windowCenter)}%` }} />
         )}
         {hasRange &&
@@ -128,7 +138,9 @@ export function Timeline({
           peers
             .filter((peer) => peer.id !== selfId)
             .map((peer) => {
-              const peerCenter = peer.live ? tMax : peer.center
+              const front = peer.lock_front !== false
+              const back = peer.lock_back !== false
+              const peerCenter = playhead(front, back, peer.center, tMin, tMax)
               if (peerCenter == null) return null
               const dur = peer.duration ?? duration
               const a = clamp(peerCenter - dur / 2, tMin, tMax)
@@ -151,7 +163,7 @@ export function Timeline({
                     onClick={() => onJumpToPeer(peer)}
                   >
                     {peer.name}
-                    {peer.live ? ' · live' : peer.playing ? ' · play' : ''}
+                    {peerLockLabel(peer)}
                   </div>
                 </div>
               )
@@ -159,7 +171,7 @@ export function Timeline({
       </div>
       <div className="axis">
         <span>{hasRange && tMin != null ? formatOffset(tMin, tMin) : '—'}</span>
-        <span>scroll to zoom (keeps live) · drag to scrub · click a name to follow</span>
+        <span>scroll to zoom · drag to pan/scrub · lock front = newest · lock back = oldest</span>
         <span>{hasRange && tMin != null && tMax != null ? formatOffset(tMax, tMin) : '—'}</span>
       </div>
     </div>

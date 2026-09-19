@@ -143,13 +143,7 @@ code,
   color: #ff8a96;
 }
 
-.btn-play.active {
-  background: #10322e;
-  border-color: var(--teal);
-  color: var(--teal);
-}
-
-.btn-live.active {
+.btn-lock.active {
   background: #10322e;
   border-color: var(--teal);
   color: var(--teal);
@@ -365,6 +359,10 @@ code,
 
 .kind-dot.thermal {
   background: #ff6b35;
+}
+
+.kind-dot.joulescope {
+  background: #7dce82;
 }
 
 .tile-actions {
@@ -735,7 +733,8 @@ code,
   cursor: nwse-resize;
 }
 
-.thermal-graph {
+.thermal-graph,
+.graph-plot {
   position: relative;
   width: 100%;
   height: 100%;
@@ -744,7 +743,8 @@ code,
   background: #080b10;
 }
 
-.thermal-graph-canvas {
+.thermal-graph-canvas,
+.graph-plot-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -752,11 +752,21 @@ code,
   display: block;
 }
 
+.graph-plot.interactive .graph-plot-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.graph-plot.interactive:active .graph-plot-canvas {
+  cursor: grabbing;
+}
+
 .thermal-zone.muted {
   opacity: 0.35;
 }
 
-.thermal-legend {
+.thermal-legend,
+.graph-legend {
   position: absolute;
   top: 6px;
   right: 8px;
@@ -774,7 +784,8 @@ code,
   border-radius: 3px;
 }
 
-.thermal-legend-item {
+.thermal-legend-item,
+.graph-legend-item {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -788,22 +799,26 @@ code,
   border-radius: 2px;
 }
 
-.thermal-legend-item:hover {
+.thermal-legend-item:hover,
+.graph-legend-item:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
-.thermal-legend-item.off {
+.thermal-legend-item.off,
+.graph-legend-item.off {
   opacity: 0.38;
   text-decoration: line-through;
 }
 
-.thermal-legend-swatch {
+.thermal-legend-swatch,
+.graph-legend-swatch {
   width: 12px;
   height: 2px;
   background: currentColor;
 }
 
-.thermal-legend-swatch.dashed {
+.thermal-legend-swatch.dashed,
+.graph-legend-swatch.dashed {
   background: repeating-linear-gradient(
     90deg,
     currentColor 0 4px,
@@ -811,7 +826,8 @@ code,
   );
 }
 
-.thermal-graph-empty {
+.thermal-graph-empty,
+.graph-plot-empty {
   position: absolute;
   inset: 0;
   display: flex;
@@ -822,6 +838,86 @@ code,
   font-size: 11px;
   pointer-events: none;
   z-index: 1;
+}
+
+.joulescope-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.joulescope-hud {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 8px;
+  z-index: 3;
+  background: rgba(8, 11, 16, 0.85);
+  border-bottom: 1px solid var(--line);
+}
+
+.joulescope-toggles {
+  display: flex;
+  gap: 4px;
+}
+
+.joulescope-ch {
+  min-width: 28px;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.joulescope-ch.off {
+  opacity: 0.35;
+  text-decoration: line-through;
+}
+
+.joulescope-ports .joulescope-ch {
+  color: #ff9f43;
+}
+
+.joulescope-ports .joulescope-ch:disabled {
+  cursor: default;
+}
+
+.joulescope-rate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.joulescope-rate select {
+  background: #0b0e14;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: inherit;
+  padding: 1px 4px;
+}
+
+.joulescope-stack {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.joulescope-stack .graph-plot {
+  flex: 1 1 0;
+  min-height: 0;
+  border-top: 1px solid #16202c;
 }
 
 .timeline {

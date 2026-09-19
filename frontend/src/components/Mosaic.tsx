@@ -1,8 +1,10 @@
 import { useRef, useState, type DragEvent, type MouseEvent } from 'react'
-import type { Layout, TileSpec } from '../types'
+import type { Layout, SourceInfo, TileSpec } from '../types'
 import { dropZoneAt, relocateLeaf, setRatio, type DropZone } from '../layout'
+import { visibleRange, type Viewport } from '../viewport'
 import { AudioWidget } from '../widgets/AudioWidget'
 import { CameraWidget } from '../widgets/CameraWidget'
+import { JoulescopeWidget } from '../widgets/JoulescopeWidget'
 import { ThermalWidget } from '../widgets/ThermalWidget'
 
 type Props = {
@@ -10,7 +12,8 @@ type Props = {
   tiles: Record<string, TileSpec>
   focusedId: string | null
   live: boolean
-  playing?: boolean
+  lockFront?: boolean
+  lockBack?: boolean
   hasCapture?: boolean
   recording?: boolean
   center: number | null
@@ -22,6 +25,8 @@ type Props = {
   onClose: (id: string) => void
   onLayout: (layout: Layout) => void
   onTileChange: (id: string, patch: Partial<TileSpec>) => void
+  onScrub?: (next: Viewport) => void
+  sources?: SourceInfo[]
 }
 
 export function Mosaic(props: Props) {
@@ -61,14 +66,10 @@ function Node(
   if (node.type === 'leaf') {
     const tile = props.tiles[node.id]
     if (!tile) return null
-    const t0 =
-      props.center == null
-        ? null
-        : Math.max(props.origin ?? Number.NEGATIVE_INFINITY, props.center - props.duration / 2)
-    const t1 =
-      props.center == null
-        ? null
-        : Math.min(props.tMax ?? Number.POSITIVE_INFINITY, props.center + props.duration / 2)
+    const win =
+      props.center == null ? null : visibleRange(props.center, props.duration, props.origin ?? null, props.tMax ?? null)
+    const t0 = win?.t0 ?? null
+    const t1 = win?.t1 ?? null
     const highlighted = props.over?.id === tile.id
 
     const onDragOver = (event: DragEvent<HTMLDivElement>) => {
@@ -138,23 +139,35 @@ function Node(
           <AudioWidget
             sourceId={tile.sourceId}
             live={props.live}
-            playing={props.playing}
+            lockFront={props.lockFront}
+            lockBack={props.lockBack}
             hasCapture={props.hasCapture}
+            recording={props.recording}
             t0={t0}
             t1={t1}
             center={props.center}
+            duration={props.duration}
+            rangeMin={props.origin}
+            rangeMax={props.tMax}
+            onScrub={props.onScrub}
+            online={props.sources?.find((src) => src.id === tile.sourceId)?.online !== false}
           />
         ) : tile.kind === 'thermal' ? (
           <ThermalWidget
             sourceId={tile.sourceId}
             live={props.live}
-            playing={props.playing}
+            lockFront={props.lockFront}
+            lockBack={props.lockBack}
             hasCapture={props.hasCapture}
             recording={props.recording}
             center={props.center}
             origin={props.origin}
             t0={t0}
             t1={t1}
+            duration={props.duration}
+            rangeMin={props.origin}
+            rangeMax={props.tMax}
+            onScrub={props.onScrub}
             zones={tile.zones}
             splitRatio={tile.splitRatio}
             showGraph={tile.showGraph !== false}
@@ -162,12 +175,30 @@ function Node(
             onSplitRatioChange={(splitRatio) => props.onTileChange(tile.id, { splitRatio })}
             onShowGraphChange={(showGraph) => props.onTileChange(tile.id, { showGraph })}
           />
+        ) : tile.kind === 'joulescope' ? (
+          <JoulescopeWidget
+            sourceId={tile.sourceId}
+            live={props.live}
+            lockFront={props.lockFront}
+            lockBack={props.lockBack}
+            hasCapture={props.hasCapture}
+            recording={props.recording}
+            t0={t0}
+            t1={t1}
+            center={props.center}
+            duration={props.duration}
+            rangeMin={props.origin}
+            rangeMax={props.tMax}
+            onScrub={props.onScrub}
+            channels={tile.channels}
+            source={props.sources?.find((src) => src.id === tile.sourceId)}
+            onChannelsChange={(channels) => props.onTileChange(tile.id, { channels })}
+          />
         ) : (
           <CameraWidget
             sourceId={tile.sourceId}
             live={props.live}
-            playing={props.playing}
-            recording={props.recording}
+            lockFront={props.lockFront}
             center={props.center}
             origin={props.origin}
           />
