@@ -16,6 +16,7 @@ import { ProfileMenu } from './components/ProfileMenu'
 import { Timeline } from './components/Timeline'
 import { addLeaf, collectLeaves, removeLeaf, splitExisting } from './layout'
 import type { Kind, Layout, Peer, SessionStatus, SplitDir, TileSpec } from './types'
+import { GRAPH_POINT_CHOICES, loadPlotPoints, savePlotPoints } from './graph'
 import { applyLocks, DEFAULT_DURATION_NS, viewRange, type Viewport } from './viewport'
 
 const DEFAULT_DURATION = DEFAULT_DURATION_NS
@@ -46,6 +47,7 @@ export default function App() {
   const [modal, setModal] = useState<'add' | 'profiles' | 'captures' | 'cap' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [capDraft, setCapDraft] = useState('1000')
+  const [plotPoints, setPlotPoints] = useState(() => loadPlotPoints())
   const seq = useRef(1)
   const liveStarted = useRef(new Set<string>())
   const presenceRef = useRef<WebSocket | null>(null)
@@ -382,6 +384,20 @@ export default function App() {
           Profiles
         </button>
         <div className="header-spacer" />
+        <label className="header-plot" title="Points drawn per graph. Lower is cheaper on long takes.">
+          <span>plot</span>
+          <select
+            value={plotPoints}
+            aria-label="Plot points"
+            onChange={(event) => setPlotPoints(savePlotPoints(Number(event.target.value)))}
+          >
+            {GRAPH_POINT_CHOICES.map((n) => (
+              <option key={n} value={n}>
+                {n} pts
+              </option>
+            ))}
+          </select>
+        </label>
         {error && <span className="error">{error}</span>}
         <button
           className="ram"
@@ -435,6 +451,7 @@ export default function App() {
               })
             }}
             sources={session?.sources}
+            plotPoints={plotPoints}
           />
         ) : (
           <div className="empty-workspace">

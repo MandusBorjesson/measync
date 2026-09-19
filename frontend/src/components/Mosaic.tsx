@@ -27,6 +27,7 @@ type Props = {
   onTileChange: (id: string, patch: Partial<TileSpec>) => void
   onScrub?: (next: Viewport) => void
   sources?: SourceInfo[]
+  plotPoints?: number
 }
 
 export function Mosaic(props: Props) {
@@ -150,6 +151,7 @@ function Node(
             rangeMin={props.origin}
             rangeMax={props.tMax}
             onScrub={props.onScrub}
+            plotPoints={props.plotPoints}
             online={props.sources?.find((src) => src.id === tile.sourceId)?.online !== false}
           />
         ) : tile.kind === 'thermal' ? (
@@ -174,6 +176,7 @@ function Node(
             onZonesChange={(zones) => props.onTileChange(tile.id, { zones })}
             onSplitRatioChange={(splitRatio) => props.onTileChange(tile.id, { splitRatio })}
             onShowGraphChange={(showGraph) => props.onTileChange(tile.id, { showGraph })}
+            plotPoints={props.plotPoints}
           />
         ) : tile.kind === 'joulescope' ? (
           <JoulescopeWidget
@@ -193,6 +196,7 @@ function Node(
             channels={tile.channels}
             source={props.sources?.find((src) => src.id === tile.sourceId)}
             onChannelsChange={(channels) => props.onTileChange(tile.id, { channels })}
+            plotPoints={props.plotPoints}
           />
         ) : (
           <CameraWidget

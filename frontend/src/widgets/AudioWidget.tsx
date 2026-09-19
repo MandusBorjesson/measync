@@ -20,6 +20,7 @@ type Props = {
   rangeMin?: number | null
   rangeMax?: number | null
   onScrub?: (next: Viewport) => void
+  plotPoints?: number
   online?: boolean
 }
 
@@ -48,12 +49,13 @@ export function AudioWidget({
   rangeMin,
   rangeMax,
   onScrub,
+  plotPoints,
   online = true,
 }: Props) {
-  const rangeRef = useRef({ t0, t1, live })
+  const rangeRef = useRef({ t0, t1, live, plotPoints })
   const [points, setPoints] = useState<BandPoint[]>([])
   const [raw, setRaw] = useState(false)
-  rangeRef.current = { t0, t1, live }
+  rangeRef.current = { t0, t1, live, plotPoints }
 
   useEffect(() => {
     let stopped = false
@@ -61,11 +63,11 @@ export function AudioWidget({
     let lastFetch = 0
     const pump = async () => {
       while (!stopped) {
-        const { t0: rawStart, t1: rawStop, live: isLive } = rangeRef.current
+        const { t0: rawStart, t1: rawStop, live: isLive, plotPoints: pointsCap } = rangeRef.current
         const win = queryWindow(rawStart, rawStop)
         const tStart = win?.t0 ?? null
         const tStop = win?.t1 ?? null
-        const key = `${tStart}:${tStop}`
+        const key = `${tStart}:${tStop}:${pointsCap ?? ''}`
         const now = performance.now()
         if (tStart == null || tStop == null) {
           await new Promise((resolve) => window.setTimeout(resolve, 16))
@@ -80,7 +82,7 @@ export function AudioWidget({
           continue
         }
         try {
-          const wave = await fetchWaveform(sourceId, tStart, tStop)
+          const wave = await fetchWaveform(sourceId, tStart, tStop, pointsCap)
           if (stopped) return
           setPoints(
             wave.t.map((t, i) => ({
@@ -102,7 +104,7 @@ export function AudioWidget({
     return () => {
       stopped = true
     }
-  }, [sourceId])
+  }, [sourceId, plotPoints])
 
   const lines = useMemo(() => [toLine(points)], [points])
 

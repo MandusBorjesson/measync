@@ -59,25 +59,39 @@ export async function fetchThermalSeries(
   t0: number,
   t1: number,
   zones: { x: number; y: number; w: number; h: number }[] = [],
+  maxPoints?: number,
 ): Promise<ThermalSeries> {
   const q = new URLSearchParams({ t0: String(Math.round(t0)), t1: String(Math.round(t1)) })
   if (zones.length) {
     q.set('zones', zones.map((z) => `${z.x},${z.y},${z.w},${z.h}`).join(';'))
   }
+  if (maxPoints != null) q.set('max_points', String(maxPoints))
   return json<ThermalSeries>(
     await fetch(`/api/session/thermal/${encodeURIComponent(sourceId)}/series?${q}`),
   )
 }
 
-export async function fetchWaveform(sourceId: string, t0: number, t1: number): Promise<Waveform> {
+export async function fetchWaveform(
+  sourceId: string,
+  t0: number,
+  t1: number,
+  maxPoints?: number,
+): Promise<Waveform> {
   const q = new URLSearchParams({ t0: String(Math.round(t0)), t1: String(Math.round(t1)) })
+  if (maxPoints != null) q.set('max_points', String(maxPoints))
   return json<Waveform>(
     await fetch(`/api/session/audio/${encodeURIComponent(sourceId)}/waveform?${q}`),
   )
 }
 
-export async function fetchJoulescopeSeries(sourceId: string, t0: number, t1: number): Promise<JoulescopeSeries> {
+export async function fetchJoulescopeSeries(
+  sourceId: string,
+  t0: number,
+  t1: number,
+  maxPoints?: number,
+): Promise<JoulescopeSeries> {
   const q = new URLSearchParams({ t0: String(Math.round(t0)), t1: String(Math.round(t1)) })
+  if (maxPoints != null) q.set('max_points', String(maxPoints))
   return json<JoulescopeSeries>(
     await fetch(`/api/session/joulescope/${encodeURIComponent(sourceId)}/series?${q}`),
   )

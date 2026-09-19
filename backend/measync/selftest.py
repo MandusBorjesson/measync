@@ -6,6 +6,15 @@ from measync.persist import load_capture, save_capture
 from measync.ring import RingBuffer
 
 
+def test_clamp_graph_points():
+    from measync.graph import GRAPH_POINTS, GRAPH_POINTS_MAX, GRAPH_POINTS_MIN, clamp_graph_points
+
+    assert clamp_graph_points(None) == GRAPH_POINTS
+    assert clamp_graph_points(1) == GRAPH_POINTS_MIN
+    assert clamp_graph_points(99_999) == GRAPH_POINTS_MAX
+    assert clamp_graph_points(100) == 100
+
+
 def test_bucket_series_step_and_bands():
     from measync.graph import bucket_series
 
@@ -510,6 +519,7 @@ def test_live_seed_and_independent_eviction():
 if __name__ == "__main__":
     import shutil
 
+    test_clamp_graph_points()
     test_bucket_series_step_and_bands()
     test_sample_times_follow_instrument_rate()
     test_available_sample_span_skips_wrapped_ids()

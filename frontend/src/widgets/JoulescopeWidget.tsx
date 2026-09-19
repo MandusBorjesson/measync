@@ -22,6 +22,7 @@ type Props = {
   channels?: JoulescopeChannel[]
   source?: SourceInfo
   onChannelsChange?: (channels: JoulescopeChannel[]) => void
+  plotPoints?: number
 }
 
 const CHANNELS: { id: JoulescopeChannel; label: string; unit: string; color: string }[] = [
@@ -53,12 +54,13 @@ export function JoulescopeWidget({
   channels,
   source,
   onChannelsChange,
+  plotPoints,
 }: Props) {
-  const rangeRef = useRef({ t0, t1, live })
+  const rangeRef = useRef({ t0, t1, live, plotPoints })
   const [series, setSeries] = useState<JoulescopeSeries>(EMPTY)
   const [rateBusy, setRateBusy] = useState(false)
   const [portBusy, setPortBusy] = useState(false)
-  rangeRef.current = { t0, t1, live }
+  rangeRef.current = { t0, t1, live, plotPoints }
   const visible = CHANNELS.filter((ch) => !channels || channels.length === 0 || channels.includes(ch.id))
   const rates = source?.sample_rates?.length ? source.sample_rates : [10, 100, 1000, 10_000, 100_000, 1_000_000]
   const rate = source?.sample_rate ?? 1000
@@ -78,11 +80,11 @@ export function JoulescopeWidget({
     let lastFetch = 0
     const pump = async () => {
       while (!stopped) {
-        const { t0: rawStart, t1: rawStop, live: isLive } = rangeRef.current
+        const { t0: rawStart, t1: rawStop, live: isLive, plotPoints: pointsCap } = rangeRef.current
         const win = queryWindow(rawStart, rawStop)
         const tStart = win?.t0 ?? null
         const tStop = win?.t1 ?? null
-        const key = `${tStart}:${tStop}`
+        const key = `${tStart}:${tStop}:${pointsCap ?? ''}`
         const now = performance.now()
         if (tStart == null || tStop == null) {
           await new Promise((resolve) => window.setTimeout(resolve, 16))
@@ -97,7 +99,7 @@ export function JoulescopeWidget({
           continue
         }
         try {
-          const next = await fetchJoulescopeSeries(sourceId, tStart, tStop)
+          const next = await fetchJoulescopeSeries(sourceId, tStart, tStop, pointsCap)
           if (stopped) return
           setSeries(next)
           lastKey = key
@@ -111,7 +113,7 @@ export function JoulescopeWidget({
     return () => {
       stopped = true
     }
-  }, [sourceId])
+  }, [sourceId, plotPoints])
 
   const panes = useMemo(
     () =>

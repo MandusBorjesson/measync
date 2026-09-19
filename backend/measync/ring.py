@@ -135,7 +135,7 @@ class CamTrack:
             return self.jpeg[before]
         return self.jpeg[i]
 
-    def series(self, t0: int, t1: int, zones: list | None = None, max_points: int = 2000) -> dict:
+    def series(self, t0: int, t1: int, zones: list | None = None, max_points: int = GRAPH_POINTS) -> dict:
         from measync.thermal import peek_coarse, peek_stats, series_point
 
         rects = list(zones or ())
@@ -261,7 +261,7 @@ class AudioTrack:
             return self.sample_rate, np.zeros(0, dtype=np.float32)
         return self.sample_rate, np.ascontiguousarray(np.concatenate(chunks), dtype=np.float32)
 
-    def envelope(self, t0: int, t1: int, max_points: int = 2000) -> dict:
+    def envelope(self, t0: int, t1: int, max_points: int = GRAPH_POINTS) -> dict:
         empty = {"t": [], "mean": [], "min": [], "max": [], "sample_rate": self.sample_rate, "raw": False}
         if self.start >= len(self.t):
             return empty
@@ -507,7 +507,7 @@ class RingBuffer:
                 return None
             return track.pcm_range(t0, t1)
 
-    def audio_envelope(self, source_id: str, t0: int, t1: int, max_points: int = 2000) -> dict | None:
+    def audio_envelope(self, source_id: str, t0: int, t1: int, max_points: int = GRAPH_POINTS) -> dict | None:
         with self.lock:
             track = self.audio.get(source_id)
             if track is None:
@@ -520,19 +520,22 @@ class RingBuffer:
         t0: int,
         t1: int,
         zones: list | None = None,
+        max_points: int = GRAPH_POINTS,
     ) -> dict | None:
         with self.lock:
             track = self.camera.get(source_id)
             if track is None or track.kind != "thermal":
                 return None
-            return track.series(t0, t1, zones)
+            return track.series(t0, t1, zones, max_points)
 
-    def joulescope_series(self, source_id: str, t0: int, t1: int) -> dict | None:
+    def joulescope_series(
+        self, source_id: str, t0: int, t1: int, max_points: int = GRAPH_POINTS
+    ) -> dict | None:
         with self.lock:
             track = self.joulescope.get(source_id)
             if track is None:
                 return None
-            return track.series(t0, t1)
+            return track.series(t0, t1, max_points)
 
     def track_meta(self) -> list[dict]:
         with self.lock:

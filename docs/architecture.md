@@ -43,14 +43,14 @@ Current implementation: [`frontend/src/widgets/CameraWidget.tsx`](../frontend/sr
 
 Continuous series over a window. Examples: audio amplitude, Joulescope voltage/current/power.
 
-Every graph is **1..N scalar lines**. If the visible window has at most `GRAPH_POINTS` samples, the widget plots those samples at their real timestamps with a **dot** on each point (`raw: true`). If there are more, each line is condensed with time-aligned `SeriesBuckets` (`raw: false`): the stroke is the **mean** of the bucket, and a **min/max band** is filled only when several samples collapsed into that point (`min !== max`). Dots are not drawn on the bucketed path — a one-sample bin is a line vertex, not a sample marker. Bucket edges are locked to an absolute time grid so panning does not reshuffle bins. Range queries include USB chunks that overlap the window (chunk stamps are the last sample). Thermal min and max stay **separate lines** (each may grow its own collapse band). Audio is one amplitude line. Joulescope is three lines (U, I, P) in stacked panes with independent Y-axes. Each pane autoscales Y; the scale holds while you pan at the same zoom so a near-DC channel (voltage) does not thrash.
+Every graph is **1..N scalar lines**. Each viewer picks a plot budget (`GRAPH_POINTS`, default **100**, query `max_points`, clamped 16–2000). That is a local display preference, not session/layout state. If the visible window has at most that many samples, the widget plots those samples at their real timestamps with a **dot** on each point (`raw: true`). If there are more, each line is condensed with time-aligned `SeriesBuckets` (`raw: false`): the stroke is the **mean** of the bucket, and a **min/max band** is filled only when several samples collapsed into that point (`min !== max`). Dots are not drawn on the bucketed path — a one-sample bin is a line vertex, not a sample marker. Bucket edges are locked to an absolute time grid so panning does not reshuffle bins. Range queries include USB chunks that overlap the window (chunk stamps are the last sample). Thermal min and max stay **separate lines** (each may grow its own collapse band). Audio is one amplitude line. Joulescope is three lines (U, I, P) in stacked panes with independent Y-axes. Each pane autoscales Y; the scale holds while you pan at the same zoom so a near-DC channel (voltage) does not thrash.
 
 | Mode | Behavior |
 |------|----------|
 | Growing buffer (preview or recording) | Query the **currently selected window** (`t0`–`t1`) from the live ring (or the capture ring while recording). Lock front pins the right edge at `t_max`; lock back pins the left edge at `t_min`; both locks fit the full interval. |
 | Scrub | Same range query, centered on the selected timestamp. |
 
-Current implementation: [`frontend/src/widgets/GraphPlot.tsx`](../frontend/src/widgets/GraphPlot.tsx) plus [`AudioWidget.tsx`](../frontend/src/widgets/AudioWidget.tsx) (`GET /api/session/audio/{id}/waveform?t0=&t1=`), [`JoulescopeWidget.tsx`](../frontend/src/widgets/JoulescopeWidget.tsx) (`GET /api/session/joulescope/{id}/series?t0=&t1=`). Downsampling lives in [`backend/measync/graph.py`](../backend/measync/graph.py).
+Current implementation: [`frontend/src/widgets/GraphPlot.tsx`](../frontend/src/widgets/GraphPlot.tsx) plus [`AudioWidget.tsx`](../frontend/src/widgets/AudioWidget.tsx) (`GET /api/session/audio/{id}/waveform?t0=&t1=&max_points=`), [`JoulescopeWidget.tsx`](../frontend/src/widgets/JoulescopeWidget.tsx) (`GET /api/session/joulescope/{id}/series?t0=&t1=&max_points=`). Downsampling lives in [`backend/measync/graph.py`](../backend/measync/graph.py).
 
 ### Hybrid
 
@@ -136,7 +136,7 @@ flowchart TB
 | [`backend/measync/devices.py`](../backend/measync/devices.py) | Enumerate cameras, Infiray thermals, mics, and Joulescopes. |
 | [`backend/measync/thermal.py`](../backend/measync/thermal.py) | Infiray P2 Pro decode, colormap JPEG, snapshot packing, zone extrema, series points. |
 | [`backend/measync/joulescope.py`](../backend/measync/joulescope.py) | Scan, serial match, supported output rates, current-port apply. |
-| [`backend/measync/graph.py`](../backend/measync/graph.py) | Shared `bucket_series` / `SeriesBuckets` mean/min/max downsampling for all graph lines. |
+| [`backend/measync/graph.py`](../backend/measync/graph.py) | Shared `bucket_series` / `SeriesBuckets` mean/min/max downsampling for all graph lines. Default budget `GRAPH_POINTS` (100); APIs accept `max_points`. |
 | [`backend/measync/persist.py`](../backend/measync/persist.py) | Capture save/load under `data/captures/`. |
 | [`backend/measync/profiles.py`](../backend/measync/profiles.py) | Profile CRUD; `safe_name()` sanitization. |
 | [`backend/measync/models.py`](../backend/measync/models.py) | Pydantic request/response schemas. |
@@ -219,10 +219,10 @@ Agents must not break these. If a feature needs to, change this document in the 
 | DELETE | `/api/sources/{source_id}` | Stop capture, drop live hub |
 | GET | `/api/session/camera/{source_id}/frame?t=` | Nearest JPEG at timestamp (ns) |
 | GET | `/api/session/thermal/{source_id}/frame?t=` | Nearest thermal snapshot (`THRM` + JPEG + temp map) |
-| GET | `/api/session/thermal/{source_id}/series?t0=&t1=` | Windowed min/max/center series (each `{mean,min,max}`); optional `zones=` |
+| GET | `/api/session/thermal/{source_id}/series?t0=&t1=` | Windowed min/max/center series (each `{mean,min,max}`); optional `zones=`, `max_points=` |
 | GET | `/api/session/audio/{source_id}/pcm?t0=&t1=` | Raw float32 PCM + `X-Sample-Rate` |
-| GET | `/api/session/audio/{source_id}/waveform?t0=&t1=` | Downsampled mean + min/max band |
-| GET | `/api/session/joulescope/{source_id}/series?t0=&t1=` | Windowed U/I/P `{mean,min,max}` bands |
+| GET | `/api/session/audio/{source_id}/waveform?t0=&t1=` | Downsampled mean + min/max band; optional `max_points=` |
+| GET | `/api/session/joulescope/{source_id}/series?t0=&t1=` | Windowed U/I/P `{mean,min,max}` bands; optional `max_points=` |
 | GET/POST/DELETE | `/api/profiles`, `/api/profiles/{name}` | List, save, load, delete |
 | GET/POST | `/api/captures`, `/api/captures/{name}/open` | List, save, open |
 

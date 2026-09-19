@@ -52,6 +52,7 @@ type Props = {
   onSplitRatioChange?: (ratio: number) => void
   showGraph?: boolean
   onShowGraphChange?: (show: boolean) => void
+  plotPoints?: number
 }
 
 type Draft = { x: number; y: number; w: number; h: number }
@@ -92,13 +93,14 @@ export function ThermalWidget({
   onSplitRatioChange,
   showGraph = true,
   onShowGraphChange,
+  plotPoints,
 }: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const urlRef = useRef<string | null>(null)
   const centerRef = useRef(center)
   const liveRef = useRef(live)
-  const rangeRef = useRef({ t0, t1, live })
+  const rangeRef = useRef({ t0, t1, live, plotPoints })
   const zonesRef = useRef(zones)
   const genRef = useRef(0)
   const [offline, setOffline] = useState(false)
@@ -114,7 +116,7 @@ export function ThermalWidget({
   const ratio = Math.min(0.82, Math.max(0.28, splitRatio))
   centerRef.current = center
   liveRef.current = live
-  rangeRef.current = { t0, t1, live }
+  rangeRef.current = { t0, t1, live, plotPoints }
   zonesRef.current = zones
   const previewLive = live && lockFront
   const zoneGeomKey = encodeZoneQuery(zones)
@@ -223,12 +225,12 @@ export function ThermalWidget({
 
     const pump = async () => {
       while (!stopped) {
-        const { t0: rawStart, t1: rawStop, live: isLive } = rangeRef.current
+        const { t0: rawStart, t1: rawStop, live: isLive, plotPoints: pointsCap } = rangeRef.current
         const win = queryWindow(rawStart, rawStop)
         const tStart = win?.t0 ?? null
         const tStop = win?.t1 ?? null
         const zoned = zonesRef.current.length > 0
-        const key = `${tStart}:${tStop}:${encodeZoneQuery(zonesRef.current)}`
+        const key = `${tStart}:${tStop}:${pointsCap ?? ''}:${encodeZoneQuery(zonesRef.current)}`
         const now = performance.now()
         if (tStart == null || tStop == null) {
           await new Promise((resolve) => window.setTimeout(resolve, zoned ? 50 : 16))
@@ -243,7 +245,7 @@ export function ThermalWidget({
           continue
         }
         try {
-          const next = await fetchThermalSeries(sourceId, tStart, tStop, zonesRef.current)
+          const next = await fetchThermalSeries(sourceId, tStart, tStop, zonesRef.current, pointsCap)
           if (stopped) return
           setSeries(next)
           lastKey = key
@@ -258,7 +260,7 @@ export function ThermalWidget({
     return () => {
       stopped = true
     }
-  }, [sourceId, zoneGeomKey, showGraph])
+  }, [sourceId, zoneGeomKey, showGraph, plotPoints])
 
   useEffect(() => {
     return () => {

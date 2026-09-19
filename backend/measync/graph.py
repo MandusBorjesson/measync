@@ -3,7 +3,19 @@ from __future__ import annotations
 import numpy as np
 
 EMPTY_BAND = {"t": [], "mean": [], "min": [], "max": []}
-GRAPH_POINTS = 800
+GRAPH_POINTS = 100
+GRAPH_POINTS_MIN = 16
+GRAPH_POINTS_MAX = 2000
+
+
+def clamp_graph_points(value: int | None) -> int:
+    if value is None:
+        return GRAPH_POINTS
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return GRAPH_POINTS
+    return max(GRAPH_POINTS_MIN, min(GRAPH_POINTS_MAX, n))
 
 
 def _as_float(y: np.ndarray | list) -> np.ndarray:
@@ -160,7 +172,7 @@ def bucket_series(
     y: np.ndarray | list,
     t0: int,
     t1: int,
-    max_points: int = 2000,
+    max_points: int = GRAPH_POINTS,
 ) -> dict[str, list]:
     """Downsample a scalar series to at most max_points.
 

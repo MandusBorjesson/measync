@@ -216,22 +216,32 @@ def audio_pcm(source_id: str, t0: float, t1: float) -> Response:
     )
 
 
+def _plot_points(max_points: int | None) -> int:
+    from measync.graph import clamp_graph_points
+
+    return clamp_graph_points(max_points)
+
+
 @app.get("/api/session/audio/{source_id:path}/waveform")
-def audio_waveform(source_id: str, t0: float, t1: float) -> dict:
+def audio_waveform(source_id: str, t0: float, t1: float, max_points: int | None = None) -> dict:
     start, stop = int(round(t0)), int(round(t1))
-    env = session().query_ring(start, stop).audio_envelope(source_id, start, stop)
+    env = session().query_ring(start, stop).audio_envelope(
+        source_id, start, stop, _plot_points(max_points)
+    )
     if env is None:
         raise HTTPException(404, "no audio")
     return env
 
 
 @app.get("/api/session/thermal/{source_id:path}/series")
-def thermal_series(source_id: str, t0: float, t1: float, zones: str | None = None) -> dict:
+def thermal_series(
+    source_id: str, t0: float, t1: float, zones: str | None = None, max_points: int | None = None
+) -> dict:
     from measync.thermal import parse_zone_rects
 
     start, stop = int(round(t0)), int(round(t1))
     series = session().query_ring(start, stop).thermal_series(
-        source_id, start, stop, parse_zone_rects(zones)
+        source_id, start, stop, parse_zone_rects(zones), _plot_points(max_points)
     )
     if series is None:
         raise HTTPException(404, "no thermal")
@@ -239,9 +249,11 @@ def thermal_series(source_id: str, t0: float, t1: float, zones: str | None = Non
 
 
 @app.get("/api/session/joulescope/{source_id:path}/series")
-def joulescope_series(source_id: str, t0: float, t1: float) -> dict:
+def joulescope_series(source_id: str, t0: float, t1: float, max_points: int | None = None) -> dict:
     start, stop = int(round(t0)), int(round(t1))
-    series = session().query_ring(start, stop).joulescope_series(source_id, start, stop)
+    series = session().query_ring(start, stop).joulescope_series(
+        source_id, start, stop, _plot_points(max_points)
+    )
     if series is None:
         raise HTTPException(404, "no joulescope")
     return series
