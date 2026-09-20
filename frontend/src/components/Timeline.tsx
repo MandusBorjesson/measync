@@ -1,6 +1,7 @@
-import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { Peer, SessionStatus } from '../types'
-import { applySeek, applyWheelZoom, clamp, playhead, viewRange, visibleRange, type Viewport } from '../viewport'
+import { dualRange, markerColor, type MeasureControls } from '../markers'
+import { applySeek, applyWheelZoom, clamp, playhead, timeFromX, viewRange, visibleRange, type Viewport } from '../viewport'
 
 type Props = {
   session: SessionStatus | null
@@ -13,6 +14,7 @@ type Props = {
   onScrub: (next: Viewport) => void
   onJumpToPeer: (peer: Peer) => void
   marker?: number | null
+  measure?: MeasureControls
 }
 
 export function Timeline({
@@ -26,9 +28,13 @@ export function Timeline({
   onScrub,
   onJumpToPeer,
   marker = null,
+  measure,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
+  const [draft, setDraft] = useState<{ t: number; dt: number } | null>(null)
+  const measureRef = useRef(measure)
+  measureRef.current = measure
   const range = viewRange(session)
   const scrubRef = useRef({
     lockFront,
@@ -79,9 +85,91 @@ export function Timeline({
     if (event.button !== 0) return
     const { tMin: min, tMax: max, duration: dur } = scrubRef.current
     if (min == null || max == null) return
-    event.preventDefault()
     const track = trackRef.current
-    track?.setPointerCapture(event.pointerId)
+    if (!track) return
+    event.preventDefault()
+    track.setPointerCapture(event.pointerId)
+    const at = (clientX: number) => timeFromX(clientX, track.getBoundingClientRect(), min, max)
+    const startT = at(event.clientX)
+    const startX = event.clientX
+    const mode = measureRef.current?.placeMode
+    if (mode === 'single') {
+      const up = () => {
+        window.removeEventListener('pointerup', up)
+        const next = measureRef.current
+        if (next?.placeMode !== 'single') return
+        next.place('single', startT)
+      }
+      window.addEventListener('pointerup', up)
+      return
+    }
+    if (mode === 'dual') {
+      setDraft({ t: startT, dt: 0 })
+      const move = (ev: PointerEvent) => setDraft({ t: startT, dt: at(ev.clientX) - startT })
+      const up = (ev: PointerEvent) => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        setDraft(null)
+        const next = measureRef.current
+        if (next?.placeMode !== 'dual') return
+        const dt = at(ev.clientX) - startT
+        if (Math.abs(dt) < 1_000_000 && Math.abs(ev.clientX - startX) < 3) return
+        next.place('dual', startT, dt || 1_000_000)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+      return
+    }
+    const startY = event.clientY
+    const trackTop = track.getBoundingClientRect().top
+    const handleHit = (clientX: number, t: number) =>
+      Math.abs(clientX - xOfClient(t)) <= 8 && Math.abs(startY - (trackTop + 7)) <= 10
+    const spanNs = Math.max(1, max - min)
+    const xOfClient = (t: number) =>
+      track.getBoundingClientRect().left + ((t - min) / spanNs) * track.getBoundingClientRect().width
+    const markers = measureRef.current?.markers ?? []
+    let hit: { id: string; edge: 't' | 'end'; t: number; dt: number; kind: 'single' | 'dual' } | null = null
+    for (let i = markers.length - 1; i >= 0; i--) {
+      const m = markers[i]
+      if (m.kind === 'single') {
+        if (handleHit(startX, m.t)) {
+          hit = { id: m.id, edge: 't', t: m.t, dt: 0, kind: 'single' }
+          break
+        }
+        continue
+      }
+      const { t0, t1 } = dualRange(m.t, m.dt)
+      if (handleHit(startX, t0)) {
+        hit = { id: m.id, edge: m.t <= m.t + m.dt ? 't' : 'end', t: m.t, dt: m.dt, kind: 'dual' }
+        break
+      }
+      if (handleHit(startX, t1)) {
+        hit = { id: m.id, edge: m.t <= m.t + m.dt ? 'end' : 't', t: m.t, dt: m.dt, kind: 'dual' }
+        break
+      }
+    }
+    if (hit) {
+      const orig = hit
+      const other = orig.t + orig.dt
+      const move = (ev: PointerEvent) => {
+        const ctl = measureRef.current
+        if (!ctl) return
+        const next = at(ev.clientX)
+        if (orig.kind === 'single') {
+          ctl.move(orig.id, { t: next })
+          return
+        }
+        if (orig.edge === 't') ctl.move(orig.id, { t: next, dt: other - next })
+        else ctl.move(orig.id, { t: orig.t, dt: next - orig.t })
+      }
+      const up = () => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+      return
+    }
     const apply = (clientX: number) => {
       const el = trackRef.current
       const { tMin: a, tMax: b, duration: d } = scrubRef.current
@@ -89,7 +177,6 @@ export function Timeline({
       onScrub(applySeek(clientX, el.getBoundingClientRect(), a, b, d))
     }
     apply(event.clientX)
-
     const move = (ev: PointerEvent) => apply(ev.clientX)
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -121,7 +208,7 @@ export function Timeline({
               : 'no samples in memory'}
         </span>
       </div>
-      <div className="timeline-track" ref={trackRef} onPointerDown={onPointerDown}>
+      <div className={`timeline-track${measure?.placeMode ? ' placing' : ''}`} ref={trackRef} onPointerDown={onPointerDown}>
         {hasRange && tMin != null && tMax != null && leftNs != null && rightNs != null && (
           <div
             className="window-rect"
@@ -131,6 +218,41 @@ export function Timeline({
             }}
           />
         )}
+        {hasRange &&
+          tMin != null &&
+          tMax != null &&
+          [...(measure?.markers ?? []), ...(draft ? [{ id: '__draft', name: '', kind: 'dual' as const, t: draft.t, dt: draft.dt }] : [])].map(
+            (m, i) => {
+              const color = m.id === '__draft' ? '#9ca3af' : markerColor(m, i)
+              if (m.kind === 'single') {
+                return (
+                  <div
+                    key={m.id}
+                    className="measure-tick"
+                    style={{ left: `${xOf(clamp(m.t, tMin, tMax))}%`, background: color, color }}
+                    title={m.name}
+                  />
+                )
+              }
+              const { t0, t1 } = dualRange(m.t, m.dt)
+              const a = xOf(clamp(t0, tMin, tMax))
+              const b = xOf(clamp(t1, tMin, tMax))
+              return (
+                <div
+                  key={m.id}
+                  className="measure-span"
+                  style={{
+                    left: `${Math.min(a, b)}%`,
+                    width: `${Math.max(0.4, Math.abs(b - a))}%`,
+                    color,
+                    borderColor: color,
+                    background: `${color}33`,
+                  }}
+                  title={m.name}
+                />
+              )
+            },
+          )}
         {hasRange && tMin != null && tMax != null && (marker ?? (!bothLocks ? windowCenter : null)) != null && (
           <div
             className="playhead"
@@ -178,7 +300,7 @@ export function Timeline({
       </div>
       <div className="axis">
         <span>{hasRange && tMin != null ? formatOffset(tMin, tMin) : '—'}</span>
-        <span>scroll to zoom · drag to pan/scrub · lock front = newest · lock back = oldest</span>
+        <span>scroll to zoom · drag to pan/scrub · cursor/span to measure</span>
         <span>{hasRange && tMin != null && tMax != null ? formatOffset(tMax, tMin) : '—'}</span>
       </div>
     </div>

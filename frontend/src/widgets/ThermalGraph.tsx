@@ -11,6 +11,7 @@ import {
 import type { GraphLine } from '../graph'
 import { GraphPlot } from './GraphPlot'
 import type { Viewport } from '../viewport'
+import type { MeasureControls } from '../markers'
 
 type Props = {
   series: ThermalSeries
@@ -28,6 +29,7 @@ type Props = {
   hidden: Record<string, boolean>
   onToggle: (id: string) => void
   showMarker?: boolean
+  measure?: MeasureControls
 }
 
 function linesFor(series: ThermalSeries, zones: ThermalZone[]): GraphLine[] {
@@ -102,6 +104,7 @@ export function ThermalGraph({
   hidden,
   onToggle,
   showMarker = false,
+  measure,
 }: Props) {
   return (
     <GraphPlot
@@ -123,6 +126,10 @@ export function ThermalGraph({
       yLabel="°C"
       emptyHint="global min / max / center · drag a zone on the image"
       showMarker={showMarker}
+      markers={measure?.markers}
+      placeMode={measure?.placeMode}
+      onPlace={measure?.place}
+      onMoveMarker={measure?.move}
     />
   )
 }

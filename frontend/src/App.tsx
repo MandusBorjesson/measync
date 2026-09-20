@@ -11,12 +11,14 @@ import {
 } from './api'
 import { AddSourceModal } from './components/AddSourceModal'
 import { CaptureMenu } from './components/CaptureMenu'
+import { MarkerMenu } from './components/MarkerMenu'
 import { Mosaic } from './components/Mosaic'
 import { ProfileMenu } from './components/ProfileMenu'
 import { Timeline } from './components/Timeline'
 import { addLeaf, collectLeaves, removeLeaf, splitExisting } from './layout'
 import type { Kind, Layout, Peer, SessionStatus, SplitDir, TileSpec } from './types'
 import { GRAPH_POINT_CHOICES, loadPlotPoints, savePlotPoints } from './graph'
+import { MAX_MARKERS, dualRange, markerCenter, nextMarkerName, type MeasureMarker, type PlaceMode } from './markers'
 import { unlockAudio } from './audioReplay'
 import {
   advancePlayhead,
@@ -61,6 +63,8 @@ export default function App() {
   const [playing, setPlaying] = useState(false)
   const [playRate, setPlayRate] = useState(1)
   const [playheadNs, setPlayheadNs] = useState<number | null>(null)
+  const [markers, setMarkers] = useState<MeasureMarker[]>([])
+  const [placeMode, setPlaceMode] = useState<PlaceMode>(null)
   const seq = useRef(1)
   const liveStarted = useRef(new Set<string>())
   const presenceRef = useRef<WebSocket | null>(null)
@@ -295,6 +299,56 @@ export default function App() {
   const ramRatio = session ? Math.min(1, session.bytes_used / Math.max(1, session.bytes_cap)) : 0
   const canSave = !!session && !session.recording && session.bytes_used > 0
   const range = viewRange(session)
+  const measure = useMemo(
+    () => ({
+      markers,
+      placeMode,
+      setPlaceMode,
+      place: (kind: 'single' | 'dual', t: number, dt?: number) => {
+        setMarkers((prev) => {
+          if (prev.length >= MAX_MARKERS) return prev
+          const id = crypto.randomUUID()
+          const name = nextMarkerName(prev, kind)
+          if (kind === 'single') return [...prev, { id, name, kind, t }]
+          return [...prev, { id, name, kind: 'dual', t, dt: dt ?? 0 }]
+        })
+        setPlaceMode(null)
+      },
+      move: (id: string, patch: { t: number; dt?: number }) => {
+        setMarkers((prev) =>
+          prev.map((m) => {
+            if (m.id !== id) return m
+            if (m.kind === 'single') return { ...m, t: patch.t }
+            return { ...m, t: patch.t, dt: patch.dt ?? m.dt }
+          }),
+        )
+      },
+      rename: (id: string, name: string) => {
+        setMarkers((prev) => prev.map((m) => (m.id === id ? { ...m, name } : m)))
+      },
+      remove: (id: string) => setMarkers((prev) => prev.filter((m) => m.id !== id)),
+      jump: (id: string) => {
+        const marker = markers.find((m) => m.id === id)
+        if (!marker || range.tMin == null || range.tMax == null) return
+        let nextDuration = duration
+        if (marker.kind === 'dual') {
+          const { t0, t1 } = dualRange(marker.t, marker.dt)
+          nextDuration = Math.max(duration, t1 - t0)
+        }
+        applyViewport(applyLocks(markerCenter(marker), nextDuration, range.tMin, range.tMax, false, false))
+        setPlaceMode(null)
+      },
+    }),
+    [markers, placeMode, duration, range.tMin, range.tMax, applyViewport],
+  )
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPlaceMode(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const hasTake = session?.t_min != null && session.t_max != null
   const growing = !!session?.recording || !hasTake
   const fitted = useMemo(() => {
@@ -520,6 +574,7 @@ export default function App() {
             ))}
           </select>
         </label>
+        <MarkerMenu {...measure} canPlace={range.tMin != null && range.tMax != null} />
         {error && <span className="error">{error}</span>}
         <button
           className="ram"
@@ -578,6 +633,7 @@ export default function App() {
             }}
             sources={session?.sources}
             plotPoints={plotPoints}
+            measure={measure}
           />
         ) : (
           <div className="empty-workspace">
@@ -597,6 +653,7 @@ export default function App() {
         center={viewCenter}
         duration={viewDuration}
         marker={showMarker ? effectivePlayhead : null}
+        measure={measure}
         peers={peers}
         selfId={selfId}
         onScrub={onScrub}

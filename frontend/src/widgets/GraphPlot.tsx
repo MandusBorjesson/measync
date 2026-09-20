@@ -1,9 +1,20 @@
-import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react'
-import { formatSi, hasBand, type GraphLine } from '../graph'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { formatSi, hasBand, sampleAt, type GraphLine } from '../graph'
+import {
+  dualRange,
+  formatDeltaNs,
+  integralUnit,
+  lineStats,
+  markerColor,
+  type MeasureMarker,
+  type PlaceMode,
+} from '../markers'
 import { applyPanDelta, applyWheelZoom, type Viewport } from '../viewport'
 
 const PAD_L = 58
 const PAD_R = 8
+const PAD_T_CSS = 10
+const HANDLE_CSS = 11
 const TIME_STEPS_NS = [
   1e6, 2e6, 5e6, 1e7, 2e7, 5e7, 1e8, 2e8, 5e8, 1e9, 2e9, 5e9, 10e9, 15e9, 30e9, 60e9,
 ]
@@ -33,35 +44,6 @@ function timeTicks(view0: number, view1: number, origin: number, maxTicks: numbe
   return { ticks, step }
 }
 
-function sampleAt(times: number[], values: (number | null)[], at: number) {
-  const n = Math.min(times.length, values.length)
-  if (n <= 0) return null
-  if (at <= times[0]) {
-    const v = values[0]
-    return v == null || !Number.isFinite(v) ? null : v
-  }
-  if (at >= times[n - 1]) {
-    const v = values[n - 1]
-    return v == null || !Number.isFinite(v) ? null : v
-  }
-  let lo = 0
-  let hi = n - 1
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1
-    if (times[mid] <= at) lo = mid
-    else hi = mid
-  }
-  const a = values[lo]
-  const b = values[hi]
-  const aOk = a != null && Number.isFinite(a)
-  const bOk = b != null && Number.isFinite(b)
-  if (!aOk) return bOk ? b : null
-  if (!bOk) return a
-  const dt = times[hi] - times[lo]
-  if (dt <= 0) return a
-  return a + ((b - a) * (at - times[lo])) / dt
-}
-
 type Props = {
   t: number[]
   lines: GraphLine[]
@@ -83,6 +65,10 @@ type Props = {
   sampleDots?: boolean
   formatTick?: (value: number) => string
   showMarker?: boolean
+  markers?: MeasureMarker[]
+  placeMode?: PlaceMode
+  onPlace?: (kind: 'single' | 'dual', t: number, dt?: number) => void
+  onMoveMarker?: (id: string, patch: { t: number; dt?: number }) => void
 }
 
 function yBounds(lines: GraphLine[]): [number, number] | null {
@@ -131,6 +117,197 @@ function stabilizeY(
   return [plo + (nlo - plo) * 0.2, phi + (nhi - phi) * 0.2]
 }
 
+function timeFromPlotX(clientX: number, rect: DOMRect, view0: number, view1: number) {
+  const plotW = Math.max(1, rect.width - PAD_L - PAD_R)
+  const x = clientX - rect.left - PAD_L
+  const span = Math.max(1, view1 - view0)
+  return view0 + (x / plotW) * span
+}
+
+function hitHandle(clientX: number, clientY: number, originX: number, originY: number) {
+  const hx = originX
+  const hy = originY + PAD_T_CSS + HANDLE_CSS / 2
+  return Math.abs(clientX - hx) <= HANDLE_CSS && Math.abs(clientY - hy) <= HANDLE_CSS
+}
+
+function drawHandle(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, dpr: number) {
+  const w = 8 * dpr
+  const h = 10 * dpr
+  const left = x - w / 2
+  ctx.fillStyle = '#080b10'
+  ctx.strokeStyle = color
+  ctx.lineWidth = Math.max(1.2, dpr)
+  ctx.beginPath()
+  ctx.roundRect(left, y, w, h, 1.5 * dpr)
+  ctx.fill()
+  ctx.stroke()
+  ctx.strokeStyle = color
+  ctx.lineWidth = Math.max(1, dpr)
+  ctx.beginPath()
+  ctx.moveTo(x - 2 * dpr, y + 3 * dpr)
+  ctx.lineTo(x + 2 * dpr, y + 3 * dpr)
+  ctx.moveTo(x - 2 * dpr, y + 5.5 * dpr)
+  ctx.lineTo(x + 2 * dpr, y + 5.5 * dpr)
+  ctx.moveTo(x - 2 * dpr, y + 8 * dpr)
+  ctx.lineTo(x + 2 * dpr, y + 8 * dpr)
+  ctx.stroke()
+}
+
+function drawReadouts(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  items: { text: string; color: string; y: number }[],
+  padL: number,
+  plotW: number,
+  padT: number,
+  axisY: number,
+  dpr: number,
+) {
+  if (!items.length) return
+  const alignRight = x > padL + plotW * 0.62
+  const labelX = alignRight ? x - 8 * dpr : x + 8 * dpr
+  items.sort((a, b) => a.y - b.y)
+  const gap = 14 * dpr
+  for (let i = 1; i < items.length; i++) {
+    if (items[i].y - items[i - 1].y < gap) items[i].y = items[i - 1].y + gap
+  }
+  if (items[items.length - 1].y > axisY - 8 * dpr) {
+    let shift = items[items.length - 1].y - (axisY - 8 * dpr)
+    for (const item of items) item.y -= shift
+    if (items[0].y < padT + 8 * dpr) {
+      shift = padT + 8 * dpr - items[0].y
+      for (const item of items) item.y += shift
+    }
+  }
+  ctx.font = `${Math.round(11 * dpr)}px "IBM Plex Mono", monospace`
+  ctx.textAlign = alignRight ? 'right' : 'left'
+  ctx.textBaseline = 'middle'
+  for (const item of items) {
+    const tw = ctx.measureText(item.text).width
+    const th = 14 * dpr
+    const pad = 3 * dpr
+    const boxX = alignRight ? labelX - tw - pad : labelX - pad
+    ctx.fillStyle = 'rgba(8, 11, 16, 0.78)'
+    ctx.fillRect(boxX, item.y - th / 2, tw + pad * 2, th)
+    ctx.fillStyle = item.color
+    ctx.fillText(item.text, labelX, item.y)
+  }
+}
+
+function drawMeasures(
+  ctx: CanvasRenderingContext2D,
+  markers: MeasureMarker[],
+  draft: { t: number; dt: number } | null,
+  t: number[],
+  lines: GraphLine[],
+  view0: number,
+  view1: number,
+  xOf: (ns: number) => number,
+  yOf: ((v: number) => number) | null,
+  padL: number,
+  plotW: number,
+  padT: number,
+  axisY: number,
+  dpr: number,
+  yLabel?: string,
+) {
+  const items: { marker: MeasureMarker; color: string; draft?: boolean }[] = markers.map((marker, i) => ({
+    marker,
+    color: markerColor(marker, i),
+  }))
+  if (draft) {
+    items.push({
+      marker: { id: '__draft', name: '', kind: 'dual', t: draft.t, dt: draft.dt },
+      color: '#9ca3af',
+      draft: true,
+    })
+  }
+  const spanVisible = (t0: number, t1: number) => t1 >= view0 && t0 <= view1
+  for (const item of items) {
+    const { marker, color } = item
+    if (marker.kind === 'single') {
+      if (marker.t < view0 || marker.t > view1) continue
+      const x = Math.min(padL + plotW, Math.max(padL, xOf(marker.t)))
+      ctx.strokeStyle = color
+      ctx.lineWidth = Math.max(1.6, dpr)
+      ctx.beginPath()
+      ctx.moveTo(x, padT)
+      ctx.lineTo(x, axisY)
+      ctx.stroke()
+      drawHandle(ctx, x, padT, color, dpr)
+      ctx.font = `${Math.round(10 * dpr)}px "IBM Plex Mono", monospace`
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'top'
+      ctx.fillStyle = color
+      if (marker.name) ctx.fillText(marker.name, x + 7 * dpr, padT + 1 * dpr)
+      if (yOf) {
+        const readouts: { text: string; color: string; y: number }[] = []
+        for (const line of lines) {
+          const value = sampleAt(t, line.mean, marker.t)
+          if (value == null) continue
+          readouts.push({
+            text: formatSi(value, line.unit ?? yLabel ?? ''),
+            color: line.color,
+            y: Math.min(axisY - 8 * dpr, Math.max(padT + 8 * dpr, yOf(value))),
+          })
+        }
+        drawReadouts(ctx, x, readouts, padL, plotW, padT, axisY, dpr)
+      }
+      continue
+    }
+    const { t0, t1 } = dualRange(marker.t, marker.dt)
+    if (!spanVisible(t0, t1)) continue
+    const x0 = Math.min(padL + plotW, Math.max(padL, xOf(t0)))
+    const x1 = Math.min(padL + plotW, Math.max(padL, xOf(t1)))
+    const left = Math.min(x0, x1)
+    const right = Math.max(x0, x1)
+    ctx.fillStyle = color
+    ctx.globalAlpha = item.draft ? 0.08 : 0.12
+    ctx.fillRect(left, padT, Math.max(1, right - left), axisY - padT)
+    ctx.globalAlpha = 1
+    ctx.strokeStyle = color
+    ctx.lineWidth = Math.max(1.6, dpr)
+    ctx.beginPath()
+    ctx.moveTo(x0, padT)
+    ctx.lineTo(x0, axisY)
+    ctx.moveTo(x1, padT)
+    ctx.lineTo(x1, axisY)
+    ctx.stroke()
+    if (!item.draft) {
+      drawHandle(ctx, x0, padT, color, dpr)
+      drawHandle(ctx, x1, padT, color, dpr)
+    }
+    ctx.font = `${Math.round(10 * dpr)}px "IBM Plex Mono", monospace`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    const title = marker.name
+      ? `${marker.name}  ${formatDeltaNs(marker.dt)}`
+      : formatDeltaNs(marker.dt)
+    const boxX = Math.min(left + 8 * dpr, padL + plotW - 8 * dpr)
+    let textY = padT + 14 * dpr
+    const tw = ctx.measureText(title).width
+    ctx.fillStyle = 'rgba(8, 11, 16, 0.78)'
+    ctx.fillRect(boxX - 2 * dpr, textY - 1 * dpr, tw + 4 * dpr, 12 * dpr)
+    ctx.fillStyle = color
+    ctx.fillText(title, boxX, textY)
+    textY += 13 * dpr
+    if (item.draft) continue
+    for (const line of lines) {
+      const stats = lineStats(t, line.mean, line.min, line.max, t0, t1)
+      if (!stats) continue
+      const unit = line.unit ?? yLabel ?? ''
+      const text = `${line.label}  min ${formatSi(stats.min, unit)}  max ${formatSi(stats.max, unit)}  avg ${formatSi(stats.avg, unit)}  ∫ ${formatSi(stats.integral, integralUnit(unit))}`
+      const w = ctx.measureText(text).width
+      ctx.fillStyle = 'rgba(8, 11, 16, 0.78)'
+      ctx.fillRect(boxX - 2 * dpr, textY - 1 * dpr, w + 4 * dpr, 12 * dpr)
+      ctx.fillStyle = line.color
+      ctx.fillText(text, boxX, textY)
+      textY += 13 * dpr
+      if (textY > axisY - 16 * dpr) break
+    }
+  }
+}
+
 function draw(
   canvas: HTMLCanvasElement,
   t: number[],
@@ -146,6 +323,8 @@ function draw(
   sampleDots?: boolean,
   rangeMin?: number | null,
   showMarker?: boolean,
+  markers?: MeasureMarker[],
+  draft?: { t: number; dt: number } | null,
 ) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
@@ -329,6 +508,29 @@ function draw(
       : lockFront
         ? view1
         : center
+  const yOfPlay = bounds
+    ? (v: number) => {
+        const [lo, hi] = bounds
+        return padT + ((hi - v) / (hi - lo)) * plotH
+      }
+    : null
+  drawMeasures(
+    ctx,
+    markers ?? [],
+    draft ?? null,
+    t,
+    lines,
+    view0,
+    view1,
+    xOf,
+    yOfPlay,
+    padL,
+    plotW,
+    padT,
+    axisY,
+    dpr,
+    yLabel,
+  )
   if (playT != null && playT >= view0 && playT <= view1) {
     const x = Math.min(padL + plotW, Math.max(padL, xOf(playT)))
     ctx.strokeStyle = '#ff3b4e'
@@ -337,11 +539,7 @@ function draw(
     ctx.moveTo(x, padT)
     ctx.lineTo(x, axisY)
     ctx.stroke()
-    if (bounds) {
-      const [lo, hi] = bounds
-      const yOf = (v: number) => padT + ((hi - v) / (hi - lo)) * plotH
-      const alignRight = x > padL + plotW * 0.62
-      const labelX = alignRight ? x - 8 * dpr : x + 8 * dpr
+    if (yOfPlay) {
       const readouts: { text: string; color: string; y: number }[] = []
       for (const line of lines) {
         const value = sampleAt(t, line.mean, playT)
@@ -349,37 +547,10 @@ function draw(
         readouts.push({
           text: formatSi(value, line.unit ?? yLabel ?? ''),
           color: line.color,
-          y: Math.min(axisY - 8 * dpr, Math.max(padT + 8 * dpr, yOf(value))),
+          y: Math.min(axisY - 8 * dpr, Math.max(padT + 8 * dpr, yOfPlay(value))),
         })
       }
-      readouts.sort((a, b) => a.y - b.y)
-      const gap = 14 * dpr
-      for (let i = 1; i < readouts.length; i++) {
-        if (readouts[i].y - readouts[i - 1].y < gap) {
-          readouts[i].y = readouts[i - 1].y + gap
-        }
-      }
-      if (readouts.length && readouts[readouts.length - 1].y > axisY - 8 * dpr) {
-        let shift = readouts[readouts.length - 1].y - (axisY - 8 * dpr)
-        for (const item of readouts) item.y -= shift
-        if (readouts[0].y < padT + 8 * dpr) {
-          shift = padT + 8 * dpr - readouts[0].y
-          for (const item of readouts) item.y += shift
-        }
-      }
-      ctx.font = `${Math.round(11 * dpr)}px "IBM Plex Mono", monospace`
-      ctx.textAlign = alignRight ? 'right' : 'left'
-      ctx.textBaseline = 'middle'
-      for (const item of readouts) {
-        const tw = ctx.measureText(item.text).width
-        const th = 14 * dpr
-        const pad = 3 * dpr
-        const boxX = alignRight ? labelX - tw - pad : labelX - pad
-        ctx.fillStyle = 'rgba(8, 11, 16, 0.78)'
-        ctx.fillRect(boxX, item.y - th / 2, tw + pad * 2, th)
-        ctx.fillStyle = item.color
-        ctx.fillText(item.text, labelX, item.y)
-      }
+      drawReadouts(ctx, x, readouts, padL, plotW, padT, axisY, dpr)
     }
   }
 }
@@ -405,10 +576,15 @@ export function GraphPlot({
   sampleDots = false,
   formatTick,
   showMarker = false,
+  markers = [],
+  placeMode = null,
+  onPlace,
+  onMoveMarker,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const visible = lines.filter((line) => !hidden?.[line.id])
+  const [draft, setDraft] = useState<{ t: number; dt: number } | null>(null)
   const dataRef = useRef({
     t,
     visible,
@@ -422,10 +598,40 @@ export function GraphPlot({
     sampleDots,
     rangeMin,
     showMarker,
+    markers,
+    draft,
   })
   const yHoldRef = useRef({ octave: 0, bounds: null as [number, number] | null })
-  const scrubRef = useRef({ center, duration, rangeMin, rangeMax, t0, t1, lockFront, lockBack, onScrub })
-  scrubRef.current = { center, duration, rangeMin, rangeMax, t0, t1, lockFront, lockBack, onScrub }
+  const scrubRef = useRef({
+    center,
+    duration,
+    rangeMin,
+    rangeMax,
+    t0,
+    t1,
+    lockFront,
+    lockBack,
+    onScrub,
+    markers,
+    placeMode,
+    onPlace,
+    onMoveMarker,
+  })
+  scrubRef.current = {
+    center,
+    duration,
+    rangeMin,
+    rangeMax,
+    t0,
+    t1,
+    lockFront,
+    lockBack,
+    onScrub,
+    markers,
+    placeMode,
+    onPlace,
+    onMoveMarker,
+  }
 
   useEffect(() => {
     dataRef.current = {
@@ -441,6 +647,8 @@ export function GraphPlot({
       sampleDots,
       rangeMin,
       showMarker,
+      markers,
+      draft,
     }
     const canvas = canvasRef.current
     if (!canvas) return
@@ -469,13 +677,15 @@ export function GraphPlot({
         d.sampleDots,
         d.rangeMin,
         d.showMarker,
+        d.markers,
+        d.draft,
       )
     }
     paint()
     const observer = new ResizeObserver(paint)
     observer.observe(canvas)
     return () => observer.disconnect()
-  }, [t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin, showMarker])
+  }, [t, visible, t0, t1, center, lockFront, lockBack, yLabel, formatTick, sampleDots, rangeMin, showMarker, markers, draft])
 
   useEffect(() => {
     const root = rootRef.current
@@ -500,26 +710,134 @@ export function GraphPlot({
   }, [onScrub])
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !onScrub) return
+    if (event.button !== 0) return
     if ((event.target as HTMLElement).closest('.graph-legend')) return
-    const { rangeMin: min, rangeMax: max, duration: dur, center: cur, t0: view0, t1: view1 } = scrubRef.current
-    if (min == null || max == null || dur == null) return
-    event.preventDefault()
+    const {
+      rangeMin: min,
+      rangeMax: max,
+      duration: dur,
+      center: cur,
+      t0: view0,
+      t1: view1,
+      onScrub: scrub,
+      markers: current,
+      placeMode: mode,
+      onPlace: place,
+      onMoveMarker: moveMarker,
+    } = scrubRef.current
     const canvas = canvasRef.current
     const rect = canvas?.getBoundingClientRect()
     if (!rect) return
+    const left = view0 ?? min
+    const right = view1 ?? max
+    if (left == null || right == null) return
+    const tAt = (clientX: number) => {
+      const raw = timeFromPlotX(clientX, rect, left, right)
+      if (min == null || max == null) return raw
+      return Math.min(max, Math.max(min, raw))
+    }
+    const startT = tAt(event.clientX)
+    const startX = event.clientX
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+
+    if (mode === 'single' && place) {
+      const up = () => {
+        window.removeEventListener('pointerup', up)
+        const ctl = scrubRef.current
+        if (ctl.placeMode !== 'single' || !ctl.onPlace) return
+        ctl.onPlace('single', tAt(startX))
+      }
+      window.addEventListener('pointerup', up)
+      return
+    }
+
+    if (mode === 'dual' && place) {
+      setDraft({ t: startT, dt: 0 })
+      const move = (ev: PointerEvent) => setDraft({ t: startT, dt: tAt(ev.clientX) - startT })
+      const up = (ev: PointerEvent) => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        setDraft(null)
+        const ctl = scrubRef.current
+        if (ctl.placeMode !== 'dual' || !ctl.onPlace) return
+        const dt = tAt(ev.clientX) - startT
+        if (Math.abs(dt) < 1_000_000 && Math.abs(ev.clientX - startX) < 3) return
+        ctl.onPlace('dual', startT, dt || 1_000_000)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+      return
+    }
+
+    const xOfCss = (ns: number) => PAD_L + ((ns - left) / Math.max(1, right - left)) * Math.max(1, rect.width - PAD_L - PAD_R)
+    type Handle = { id: string; edge: 't' | 'end'; t: number; dt: number; kind: MeasureMarker['kind'] }
+    let hit: Handle | null = null
+    for (let i = current.length - 1; i >= 0; i--) {
+      const marker = current[i]
+      if (marker.kind === 'single') {
+        if (hitHandle(event.clientX, event.clientY, rect.left + xOfCss(marker.t), rect.top)) {
+          hit = { id: marker.id, edge: 't', t: marker.t, dt: 0, kind: 'single' }
+          break
+        }
+        continue
+      }
+      const { t0, t1 } = dualRange(marker.t, marker.dt)
+      const x0 = rect.left + xOfCss(t0)
+      const x1 = rect.left + xOfCss(t1)
+      if (hitHandle(event.clientX, event.clientY, x0, rect.top)) {
+        hit = {
+          id: marker.id,
+          edge: marker.t <= marker.t + marker.dt ? 't' : 'end',
+          t: marker.t,
+          dt: marker.dt,
+          kind: 'dual',
+        }
+        break
+      }
+      if (hitHandle(event.clientX, event.clientY, x1, rect.top)) {
+        hit = {
+          id: marker.id,
+          edge: marker.t <= marker.t + marker.dt ? 'end' : 't',
+          t: marker.t,
+          dt: marker.dt,
+          kind: 'dual',
+        }
+        break
+      }
+    }
+    if (hit && moveMarker) {
+      const orig = hit
+      const other = orig.t + orig.dt
+      const move = (ev: PointerEvent) => {
+        const at = tAt(ev.clientX)
+        if (orig.kind === 'single') {
+          moveMarker(orig.id, { t: at })
+          return
+        }
+        if (orig.edge === 't') moveMarker(orig.id, { t: at, dt: other - at })
+        else moveMarker(orig.id, { t: orig.t, dt: at - orig.t })
+      }
+      const up = () => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+      return
+    }
+
+    if (!scrub || min == null || max == null || dur == null) return
     const plotWidth = Math.max(1, rect.width - PAD_L - PAD_R)
     const startCenter = cur ?? (view0 != null && view1 != null ? (view0 + view1) / 2 : min)
     const viewSpan = view0 != null && view1 != null ? Math.max(1, view1 - view0) : dur
-    const startX = event.clientX
-    event.currentTarget.setPointerCapture(event.pointerId)
     let dragged = false
     const apply = (clientX: number) => {
       if (!dragged && Math.abs(clientX - startX) < 3) return
       dragged = true
-      const { rangeMin: a, rangeMax: b, duration: d, onScrub: scrub } = scrubRef.current
-      if (a == null || b == null || d == null || !scrub) return
-      scrub(applyPanDelta(startCenter, startX, clientX, plotWidth, viewSpan, a, b, d))
+      const { rangeMin: a, rangeMax: b, duration: d, onScrub: next } = scrubRef.current
+      if (a == null || b == null || d == null || !next) return
+      next(applyPanDelta(startCenter, startX, clientX, plotWidth, viewSpan, a, b, d))
     }
     const move = (ev: PointerEvent) => apply(ev.clientX)
     const up = () => {
@@ -530,11 +848,12 @@ export function GraphPlot({
     window.addEventListener('pointerup', up)
   }
 
+  const interactive = !!onScrub || !!placeMode || markers.length > 0
   return (
     <div
-      className={`graph-plot${onScrub ? ' interactive' : ''}`}
+      className={`graph-plot${interactive ? ' interactive' : ''}${placeMode ? ' placing' : ''}`}
       ref={rootRef}
-      onPointerDown={onScrub ? onPointerDown : undefined}
+      onPointerDown={interactive ? onPointerDown : undefined}
     >
       <canvas ref={canvasRef} className="graph-plot-canvas" />
       {legend && onToggle && (

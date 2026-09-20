@@ -1,6 +1,7 @@
 import { useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import type { Layout, SourceInfo, TileSpec } from '../types'
 import { dropZoneAt, relocateLeaf, setRatio, type DropZone } from '../layout'
+import type { MeasureControls } from '../markers'
 import { visibleRange, type Viewport } from '../viewport'
 import { AudioWidget } from '../widgets/AudioWidget'
 import { CameraWidget } from '../widgets/CameraWidget'
@@ -32,6 +33,7 @@ type Props = {
   onScrub?: (next: Viewport) => void
   sources?: SourceInfo[]
   plotPoints?: number
+  measure?: MeasureControls
 }
 
 export function Mosaic(props: Props) {
@@ -167,6 +169,7 @@ function Node(
             playing={props.playing}
             playRate={props.playRate}
             online={props.sources?.find((src) => src.id === tile.sourceId)?.online !== false}
+            measure={props.measure}
           />
         ) : tile.kind === 'thermal' ? (
           <ThermalWidget
@@ -192,6 +195,7 @@ function Node(
             onShowGraphChange={(showGraph) => props.onTileChange(tile.id, { showGraph })}
             plotPoints={props.plotPoints}
             showMarker={props.showMarker}
+            measure={props.measure}
           />
         ) : tile.kind === 'joulescope' ? (
           <JoulescopeWidget
@@ -213,6 +217,7 @@ function Node(
             onChannelsChange={(channels) => props.onTileChange(tile.id, { channels })}
             plotPoints={props.plotPoints}
             showMarker={props.showMarker}
+            measure={props.measure}
           />
         ) : (
           <CameraWidget

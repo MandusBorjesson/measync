@@ -4,6 +4,7 @@ import { emptyBand, formatRate, LIVE_FETCH_MS } from '../graph'
 import type { JoulescopeChannel, JoulescopeSeries, SourceInfo } from '../types'
 import { queryWindow, type Viewport } from '../viewport'
 import { GraphPlot } from './GraphPlot'
+import type { MeasureControls } from '../markers'
 
 type Props = {
   sourceId: string
@@ -24,6 +25,7 @@ type Props = {
   onChannelsChange?: (channels: JoulescopeChannel[]) => void
   plotPoints?: number
   showMarker?: boolean
+  measure?: MeasureControls
 }
 
 const CHANNELS: { id: JoulescopeChannel; label: string; unit: string; color: string }[] = [
@@ -57,6 +59,7 @@ export function JoulescopeWidget({
   onChannelsChange,
   plotPoints,
   showMarker = false,
+  measure,
 }: Props) {
   const rangeRef = useRef({ t0, t1, live, plotPoints })
   const [series, setSeries] = useState<JoulescopeSeries>(EMPTY)
@@ -224,6 +227,10 @@ export function JoulescopeWidget({
             sampleDots={!!series.raw}
             yLabel={pane.unit}
             showMarker={showMarker}
+            markers={measure?.markers}
+            placeMode={measure?.placeMode}
+            onPlace={measure?.place}
+            onMoveMarker={measure?.move}
           />
         ))}
       </div>

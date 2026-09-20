@@ -61,6 +61,8 @@ code,
   border-bottom: 1px solid var(--line);
   background: rgba(12, 16, 22, 0.92);
   backdrop-filter: blur(8px);
+  position: relative;
+  z-index: 20;
 }
 
 .brand {
@@ -786,6 +788,12 @@ code,
   cursor: grabbing;
 }
 
+.graph-plot.placing .graph-plot-canvas,
+.graph-plot.placing:active .graph-plot-canvas,
+.timeline-track.placing {
+  cursor: crosshair;
+}
+
 .thermal-zone.muted {
   opacity: 0.35;
 }
@@ -986,7 +994,9 @@ code,
 .playhead,
 .peer-marker,
 .peer-bracket,
-.peer-tick {
+.peer-tick,
+.measure-tick,
+.measure-span {
   pointer-events: none;
 }
 
@@ -1005,6 +1015,51 @@ code,
   bottom: 0;
   width: 2px;
   background: var(--amber);
+}
+
+.measure-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-1px);
+}
+
+.measure-tick::after,
+.measure-span::before,
+.measure-span::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  width: 10px;
+  height: 10px;
+  background: #080b10;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  box-sizing: border-box;
+}
+
+.measure-tick::after {
+  left: 50%;
+  transform: translateX(-50%);
+  background: currentColor;
+  border-color: currentColor;
+}
+
+.measure-span {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-left: 2px solid;
+  border-right: 2px solid;
+}
+
+.measure-span::before {
+  left: -6px;
+}
+
+.measure-span::after {
+  right: -6px;
 }
 
 .peer-marker {
@@ -1162,4 +1217,88 @@ code,
   color: var(--red);
   font-size: 12px;
   margin: 8px 0 0;
+}
+
+.marker-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+
+.marker-menu-list {
+  position: relative;
+}
+
+.marker-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  width: 340px;
+  padding: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+}
+
+.marker-pop-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.marker-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.marker-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.marker-items li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto 22px;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.marker-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: currentColor;
+}
+
+.marker-swatch.span {
+  height: 4px;
+  border-radius: 1px;
+}
+
+.marker-items input {
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #0b0f16;
+  color: var(--text);
+  padding: 0 6px;
+  font: inherit;
+}
+
+.marker-meta {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--muted);
 }

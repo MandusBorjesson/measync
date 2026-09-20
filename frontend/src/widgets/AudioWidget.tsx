@@ -4,6 +4,7 @@ import { playCaptureAudio } from '../audioReplay'
 import { LIVE_FETCH_MS, type GraphLine } from '../graph'
 import { queryWindow, type Viewport } from '../viewport'
 import { GraphPlot } from './GraphPlot'
+import type { MeasureControls } from '../markers'
 
 type BandPoint = { t: number; mean: number; min: number; max: number }
 
@@ -26,6 +27,7 @@ type Props = {
   showMarker?: boolean
   playing?: boolean
   playRate?: number
+  measure?: MeasureControls
 }
 
 const LINE_ID = 'amplitude'
@@ -58,6 +60,7 @@ export function AudioWidget({
   showMarker = false,
   playing = false,
   playRate = 1,
+  measure,
 }: Props) {
   const rangeRef = useRef({ t0, t1, live, plotPoints })
   const [points, setPoints] = useState<BandPoint[]>([])
@@ -146,6 +149,10 @@ export function AudioWidget({
         yLabel=""
         emptyHint=""
         showMarker={showMarker}
+        markers={measure?.markers}
+        placeMode={measure?.placeMode}
+        onPlace={measure?.place}
+        onMoveMarker={measure?.move}
       />
       {!online ? (
         <div className="stamp offline">OFFLINE</div>

@@ -27,6 +27,35 @@ export function hasBand(min: number | null, max: number | null) {
   return min != null && max != null && Number.isFinite(min) && Number.isFinite(max) && min !== max
 }
 
+export function sampleAt(times: number[], values: (number | null)[], at: number) {
+  const n = Math.min(times.length, values.length)
+  if (n <= 0) return null
+  if (at <= times[0]) {
+    const v = values[0]
+    return v == null || !Number.isFinite(v) ? null : v
+  }
+  if (at >= times[n - 1]) {
+    const v = values[n - 1]
+    return v == null || !Number.isFinite(v) ? null : v
+  }
+  let lo = 0
+  let hi = n - 1
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (times[mid] <= at) lo = mid
+    else hi = mid
+  }
+  const a = values[lo]
+  const b = values[hi]
+  const aOk = a != null && Number.isFinite(a)
+  const bOk = b != null && Number.isFinite(b)
+  if (!aOk) return bOk ? b : null
+  if (!bOk) return a
+  const dt = times[hi] - times[lo]
+  if (dt <= 0) return a
+  return a + ((b - a) * (at - times[lo])) / dt
+}
+
 export const LIVE_FETCH_MS = 200
 export const GRAPH_POINTS = 100
 export const GRAPH_POINTS_MIN = 16

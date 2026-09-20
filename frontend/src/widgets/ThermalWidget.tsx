@@ -31,6 +31,7 @@ import {
 import { LIVE_FETCH_MS } from '../graph'
 import { queryWindow, type Viewport } from '../viewport'
 import { ThermalGraph } from './ThermalGraph'
+import type { MeasureControls } from '../markers'
 
 type Props = {
   sourceId: string
@@ -55,6 +56,7 @@ type Props = {
   onShowGraphChange?: (show: boolean) => void
   plotPoints?: number
   showMarker?: boolean
+  measure?: MeasureControls
 }
 
 type Draft = { x: number; y: number; w: number; h: number }
@@ -97,6 +99,7 @@ export function ThermalWidget({
   onShowGraphChange,
   plotPoints,
   showMarker = false,
+  measure,
 }: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -587,6 +590,7 @@ export function ThermalWidget({
               hidden={hidden}
               onToggle={toggleLine}
               showMarker={showMarker}
+              measure={measure}
             />
           </div>
         </>
