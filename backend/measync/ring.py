@@ -271,11 +271,16 @@ class AudioTrack:
 
     def append(self, t_ns: int, samples: np.ndarray) -> int:
         chunk = _own_f32(samples)
+        n = int(chunk.size)
+        if n <= 0:
+            return 0
+        prev = self.t[-1] if self.start < len(self.t) else None
+        t_ns = _monotonic_chunk_end(prev, t_ns, n, self.sample_rate)
         self.t.append(t_ns)
         self.pcm.append(chunk)
         self.pmin.append(float(chunk.min()) if chunk.size else 0.0)
         self.pmax.append(float(chunk.max()) if chunk.size else 0.0)
-        self.bins.add(_sample_times(t_ns, int(chunk.size), self.sample_rate), chunk)
+        self.bins.add(_sample_times(t_ns, n, self.sample_rate), chunk)
         return int(chunk.nbytes) + PCM_OVERHEAD
 
     def pop_while_at_or_before(self, horizon_ns: int) -> int:

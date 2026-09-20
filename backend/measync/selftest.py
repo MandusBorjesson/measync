@@ -412,13 +412,26 @@ def test_ingest_bins_stable_when_panning():
 
 
 def test_overlapping_chunk_times_stay_monotonic():
+    from measync.ring import _sample_times
+
     ring = RingBuffer(cap_bytes=10_000_000)
-    samples = np.linspace(0, 1, 40, dtype=np.float32)
-    ring.append_audio("audio:0", "mic", 1000, 40_000_000, samples)
-    ring.append_audio("audio:0", "mic", 1000, 45_000_000, samples)
-    env = ring.audio_envelope("audio:0", 0, 50_000_000, max_points=200)
-    assert env is not None and len(env["t"]) > 0
+    first_pcm = np.linspace(0, 1, 40, dtype=np.float32)
+    second_pcm = np.linspace(2, 3, 40, dtype=np.float32)
+    ring.append_audio("audio:0", "mic", 1000, 40_000_000, first_pcm)
+    ring.append_audio("audio:0", "mic", 1000, 45_000_000, second_pcm)
+    track = ring.audio["audio:0"]
+    first = _sample_times(track.t[0], 40, 1000)
+    second = _sample_times(track.t[1], 40, 1000)
+    assert int(second[0]) > int(first[-1])
+    env = ring.audio_envelope("audio:0", int(first[0]), int(second[-1]), max_points=200)
+    assert env is not None and env["raw"] is True
     assert all(later >= earlier for earlier, later in zip(env["t"], env["t"][1:]))
+    means = [v for v in env["mean"] if v is not None]
+    assert means[0] < 1.0
+    assert means[-1] > 2.0
+    ring.append_audio("audio:1", "mic", 1000, 40_000_000, first_pcm)
+    ring.append_audio("audio:1", "mic", 1000, 80_000_000, second_pcm)
+    assert ring.audio["audio:1"].t == [40_000_000, 80_000_000]
 
 
 def test_raw_samples_stable_when_panning():

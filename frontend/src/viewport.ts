@@ -1,4 +1,4 @@
-export const MIN_DURATION_NS = 20_000_000
+export const MIN_DURATION_NS = 2_000_000
 export const DEFAULT_DURATION_NS = 2_000_000_000
 export const PLAY_RATES = [0.25, 0.5, 1, 2, 4, 8] as const
 
